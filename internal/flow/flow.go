@@ -70,6 +70,9 @@ func New(st *store.Store, p idp.Provider, m imail.Sender, c coc.CoC, s Settings,
 
 func (s *Service) CoC() coc.CoC { return s.coc }
 
+// Quota is the number of invites a non-admin member may have in use.
+func (s *Service) Quota() int { return s.s.Quota }
+
 func TokenHash(token string) ([]byte, bool) {
 	if len(token) != 43 {
 		return nil, false

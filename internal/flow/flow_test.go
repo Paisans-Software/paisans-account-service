@@ -234,3 +234,10 @@ func TestProviderDownAtApplyStoresApplication(t *testing.T) {
 		t.Fatalf("approval needs the provider: err=%v created=%d", err, f.Created)
 	}
 }
+
+func TestQuotaReportsSetting(t *testing.T) {
+	s, _, _ := setup(t, true)
+	if s.Quota() != 2 {
+		t.Fatal(s.Quota())
+	}
+}

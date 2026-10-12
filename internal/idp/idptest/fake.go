@@ -1,0 +1,79 @@
+// Package idptest is an in-memory identity provider for tests.
+package idptest
+
+import (
+	"context"
+	"fmt"
+	"strings"
+	"sync"
+
+	"github.com/paisans-software/paisans-invite/internal/idp"
+)
+
+type Fake struct {
+	mu                       sync.Mutex
+	Users                    []idp.User
+	FailCreate, FailSendLink error
+	Created, LinksSent       int
+}
+
+func (f *Fake) UsernameTaken(_ context.Context, n string) (bool, error) {
+	_, ok, _ := f.FindUser(context.Background(), n)
+	return ok, nil
+}
+
+func (f *Fake) EmailTaken(_ context.Context, e string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, u := range f.Users {
+		if strings.EqualFold(u.Email, strings.TrimSpace(e)) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (f *Fake) FindUser(_ context.Context, n string) (idp.User, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, u := range f.Users {
+		if strings.EqualFold(u.Username, n) {
+			return u, true, nil
+		}
+	}
+	return idp.User{}, false, nil
+}
+
+func (f *Fake) AdminEmails(context.Context) ([]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []string
+	for _, u := range f.Users {
+		if u.IsAdmin {
+			out = append(out, u.Email)
+		}
+	}
+	return out, nil
+}
+
+func (f *Fake) CreateUser(_ context.Context, n idp.NewUser) (idp.User, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.FailCreate != nil {
+		return idp.User{}, f.FailCreate
+	}
+	f.Created++
+	u := idp.User{ID: fmt.Sprintf("id-%d", f.Created), Username: n.Username, Email: n.Email}
+	f.Users = append(f.Users, u)
+	return u, nil
+}
+
+func (f *Fake) SendLoginLink(context.Context, string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.FailSendLink != nil {
+		return f.FailSendLink
+	}
+	f.LinksSent++
+	return nil
+}

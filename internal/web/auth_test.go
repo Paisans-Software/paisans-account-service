@@ -3,6 +3,7 @@ package web
 import (
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 	"time"
 )
@@ -21,7 +22,7 @@ func TestAdmitRefusesNonMember(t *testing.T) {
 	}
 	for _, c := range cases {
 		rec := httptest.NewRecorder()
-		a.admit(rec, httptest.NewRequest("GET", "/auth/callback", nil), "sub", "alice", c.groups)
+		a.admit(rec, httptest.NewRequest("GET", "/auth/callback", nil), "sub", "alice", c.groups, "/")
 		if rec.Code != c.code {
 			t.Fatalf("%v: code %d", c.groups, rec.Code)
 		}
@@ -64,6 +65,45 @@ func TestCallbackPreProviderRefusals(t *testing.T) {
 			if ck.Name == "invite_session" {
 				t.Fatalf("%s: session cookie set", name)
 			}
+		}
+	}
+}
+
+func TestLoginKeepsOnlyLocalNext(t *testing.T) {
+	key := make([]byte, 32)
+	a := &authenticator{s: sessions{key: key}}
+	for next, want := range map[string]string{
+		"/admin":               "/admin",
+		"/admin?error=busy":    "/admin?error=busy",
+		"":                     "/",
+		"//evil.example":       "/",
+		"/\\evil.example":      "/",
+		"https://evil.example": "/",
+		"admin":                "/",
+		"/a\nb":                "/",
+	} {
+		rec := httptest.NewRecorder()
+		a.login(rec, httptest.NewRequest("GET", "/auth/login?next="+url.QueryEscape(next), nil))
+		var st loginState
+		var found bool
+		for _, c := range rec.Result().Cookies() {
+			if c.Name == "invite_login" {
+				found = verify(key, "login", c.Value, &st)
+			}
+		}
+		if !found || st.Next != want {
+			t.Errorf("next %q: stored %q, want %q", next, st.Next, want)
+		}
+	}
+}
+
+func TestAdmitReturnsToNext(t *testing.T) {
+	a := &authenticator{memberGrp: "members", adminGrp: "admins", s: sessions{key: make([]byte, 32)}}
+	for next, want := range map[string]string{"/admin": "/admin", "//evil.example": "/", "": "/"} {
+		rec := httptest.NewRecorder()
+		a.admit(rec, httptest.NewRequest("GET", "/auth/callback", nil), "sub", "root", []string{"admins"}, next)
+		if rec.Code != 302 || rec.Header().Get("Location") != want {
+			t.Errorf("next %q: %d %s", next, rec.Code, rec.Header().Get("Location"))
 		}
 	}
 }

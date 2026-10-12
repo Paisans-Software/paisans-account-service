@@ -66,7 +66,7 @@ func TestAnonymousRedirectsToLogin(t *testing.T) {
 	h := newHarness(t, true)
 	rec := httptest.NewRecorder()
 	h.h.ServeHTTP(rec, httptest.NewRequest("GET", "/", nil))
-	if rec.Code != 302 || rec.Header().Get("Location") != "/auth/login" {
+	if rec.Code != 302 || rec.Header().Get("Location") != "/auth/login?next=%2F" {
 		t.Fatalf("%d %s", rec.Code, rec.Header().Get("Location"))
 	}
 }
@@ -175,6 +175,12 @@ func TestAnonymousAdminRedirects(t *testing.T) {
 	h := newHarness(t, true)
 	rec := httptest.NewRecorder()
 	h.h.ServeHTTP(rec, httptest.NewRequest("GET", "/admin", nil))
+	if rec.Code != 302 || rec.Header().Get("Location") != "/auth/login?next=%2Fadmin" {
+		t.Fatalf("%d %s", rec.Code, rec.Header().Get("Location"))
+	}
+	// A form post cannot be replayed after sign-in, so it carries no next.
+	rec = httptest.NewRecorder()
+	h.h.ServeHTTP(rec, httptest.NewRequest("POST", "/invites", nil))
 	if rec.Code != 302 || rec.Header().Get("Location") != "/auth/login" {
 		t.Fatalf("%d %s", rec.Code, rec.Header().Get("Location"))
 	}

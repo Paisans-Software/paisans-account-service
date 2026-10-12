@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"io/fs"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -90,7 +91,13 @@ func (s *server) member(h sessionHandler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		sess, ok := s.Sessions.read(r)
 		if !ok {
-			http.Redirect(w, r, "/auth/login", http.StatusFound)
+			// A GET comes back to where it started; a form post cannot be
+			// replayed, so it starts again from the home page.
+			login := "/auth/login"
+			if r.Method == http.MethodGet {
+				login += "?next=" + url.QueryEscape(r.URL.RequestURI())
+			}
+			http.Redirect(w, r, login, http.StatusFound)
 			return
 		}
 		if r.Method == http.MethodPost && subtle.ConstantTimeCompare([]byte(r.PostFormValue("csrf")), []byte(sess.CSRF)) != 1 {

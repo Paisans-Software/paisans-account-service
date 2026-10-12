@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
@@ -24,7 +25,23 @@ type authenticator struct {
 
 type loginState struct {
 	State, Nonce, Verifier string
-	Exp                    int64
+	// Next is the local path to return to after sign-in.
+	Next string
+	Exp  int64
+}
+
+// localPath returns p if it is a path on this site, and "/" otherwise. A
+// leading "//" or "/\" would be read by a browser as another host.
+func localPath(p string) string {
+	if !strings.HasPrefix(p, "/") || strings.HasPrefix(p, "//") || strings.ContainsAny(p, "\\") {
+		return "/"
+	}
+	for _, c := range p {
+		if c < 0x20 || c == 0x7f {
+			return "/"
+		}
+	}
+	return p
 }
 
 func randomString() string {
@@ -50,7 +67,8 @@ func newAuthenticator(ctx context.Context, cfg config.Config, s sessions) (*auth
 }
 
 func (a *authenticator) login(w http.ResponseWriter, r *http.Request) {
-	st := loginState{State: randomString(), Nonce: randomString(), Verifier: oauth2.GenerateVerifier(), Exp: time.Now().Add(10 * time.Minute).Unix()}
+	st := loginState{State: randomString(), Nonce: randomString(), Verifier: oauth2.GenerateVerifier(),
+		Next: localPath(r.URL.Query().Get("next")), Exp: time.Now().Add(10 * time.Minute).Unix()}
 	v, err := sign(a.s.key, "login", st)
 	if err != nil {
 		slog.Error("login state sign failed", "err", err)
@@ -89,17 +107,17 @@ func (a *authenticator) callback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Sign-in failed.", http.StatusBadGateway)
 		return
 	}
-	a.admit(w, r, claims.Sub, claims.PreferredUsername, claims.Groups)
+	a.admit(w, r, claims.Sub, claims.PreferredUsername, claims.Groups, st.Next)
 }
 
-// admit starts a session for a verified identity, or refuses one that is in
-// neither the member nor the admin group.
-func (a *authenticator) admit(w http.ResponseWriter, r *http.Request, sub, username string, groups []string) {
+// admit starts a session for a verified identity and returns it to next, or
+// refuses one that is in neither the member nor the admin group.
+func (a *authenticator) admit(w http.ResponseWriter, r *http.Request, sub, username string, groups []string, next string) {
 	admin := slices.Contains(groups, a.adminGrp)
 	if !admin && !slices.Contains(groups, a.memberGrp) {
 		http.Error(w, "Only members can make invites.", http.StatusForbidden)
 		return
 	}
 	a.s.write(w, Session{Sub: sub, Username: username, Admin: admin, CSRF: randomString(), Exp: time.Now().Add(8 * time.Hour).Unix()})
-	http.Redirect(w, r, "/", http.StatusFound)
+	http.Redirect(w, r, localPath(next), http.StatusFound)
 }

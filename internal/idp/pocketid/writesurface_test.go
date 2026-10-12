@@ -2,8 +2,10 @@ package pocketid
 
 import (
 	"go/ast"
+	"go/importer"
 	"go/parser"
 	"go/token"
+	"go/types"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -13,15 +15,47 @@ import (
 	"testing"
 )
 
+var allowedImports = map[string]bool{
+	"bytes": true, "context": true, "encoding/json": true, "errors": true, "fmt": true,
+	"io": true, "log/slog": true, "net/http": true, "net/url": true, "strings": true,
+	"github.com/paisans-software/paisans-invite/internal/idp": true,
+}
+
+var httpWriteConsts = map[string]bool{
+	"MethodPost": true, "MethodPut": true, "MethodPatch": true, "MethodDelete": true,
+	"MethodConnect": true, "MethodOptions": true, "MethodTrace": true,
+}
+
+func isNetHTTP(o types.Object) bool {
+	return o != nil && o.Pkg() != nil && o.Pkg().Path() == "net/http"
+}
+
+// recvName is the bare type name of a method's receiver, or "" for a function.
+func recvName(f *types.Func) string {
+	r := f.Type().(*types.Signature).Recv()
+	if r == nil {
+		return ""
+	}
+	t := r.Type()
+	if p, ok := t.(*types.Pointer); ok {
+		t = p.Elem()
+	}
+	if n, ok := t.(*types.Named); ok {
+		return n.Obj().Name()
+	}
+	return "?"
+}
+
 // The service is approved to make exactly two writes at the identity
-// provider. This test fails on a third, on a write moved to another
-// function, on any other way of spelling an HTTP write, on a changed path,
-// and on any request body field beyond the approved ones. A failure is a
+// provider. This test is type-checked, so a shadowed name or a look-alike
+// function cannot stand in for net/http. It fails on a third write, on a write
+// moved to another function, on any other way of building or sending a request,
+// on an import that could open a connection by another route, on a changed
+// path, and on any request body field beyond the approved ones. A failure is a
 // question for the founder, not a test to fix.
 func TestWriteSurface(t *testing.T) {
 	files, _ := filepath.Glob("*.go")
 	fset := token.NewFileSet()
-	writes := map[string]int{}
 	var parsed []*ast.File
 	for _, f := range files {
 		if strings.HasSuffix(f, "_test.go") {
@@ -37,32 +71,50 @@ func TestWriteSurface(t *testing.T) {
 		}
 		parsed = append(parsed, file)
 		for _, imp := range file.Imports {
-			if imp.Path.Value == `"net/http"` && imp.Name != nil {
-				t.Fatalf("%s imports net/http under an alias", f)
+			if p, _ := strconv.Unquote(imp.Path.Value); !allowedImports[p] {
+				t.Errorf("%s: import %s is not on the allowlist", fset.Position(imp.Pos()), p)
 			}
 		}
+	}
+	info := &types.Info{
+		Defs:       map[*ast.Ident]types.Object{},
+		Uses:       map[*ast.Ident]types.Object{},
+		Selections: map[*ast.SelectorExpr]*types.Selection{},
+	}
+	conf := types.Config{Importer: importer.ForCompiler(fset, "source", nil)}
+	pkg, err := conf.Check("github.com/paisans-software/paisans-invite/internal/idp/pocketid", fset, parsed, info)
+	if err != nil {
+		t.Fatalf("type-checking the package: %v", err)
+	}
+
+	isClientDo := func(fn *ast.FuncDecl) bool {
+		if fn.Recv == nil || fn.Name.Name != "do" {
+			return false
+		}
+		f, ok := info.Defs[fn.Name].(*types.Func)
+		return ok && types.TypeString(f.Type().(*types.Signature).Recv().Type(), nil) == "*"+pkg.Path()+".Client"
+	}
+
+	writes := map[string]int{}
+	posts := map[string]int{}
+	exported := map[string]bool{"UsernameTaken": true, "EmailTaken": true, "FindUser": true, "AdminEmails": true, "CreateUser": true, "SendLoginLink": true}
+	for _, file := range parsed {
 		for _, decl := range file.Decls {
-			owner := "<package>"
+			owner, inDo := "<package>", false
 			if fn, ok := decl.(*ast.FuncDecl); ok {
-				owner = fn.Name.Name
+				owner, inDo = fn.Name.Name, isClientDo(fn)
+				if fn.Name.IsExported() && !(fn.Recv == nil && fn.Name.Name == "New") && !(fn.Recv != nil && exported[fn.Name.Name]) {
+					t.Errorf("%s: exported %s is not part of the approved surface", fset.Position(fn.Pos()), fn.Name.Name)
+				}
+				if inDo {
+					checkDoBody(t, fset, info, fn)
+				}
 			}
+			callFuns := map[ast.Node]bool{}
 			ast.Inspect(decl, func(n ast.Node) bool {
 				switch x := n.(type) {
-				case *ast.SelectorExpr:
-					if id, ok := x.X.(*ast.Ident); ok && id.Name == "http" {
-						switch x.Sel.Name {
-						case "MethodPost", "MethodPut", "MethodPatch", "MethodDelete", "MethodConnect", "MethodOptions", "MethodTrace":
-							writes[owner+":"+x.Sel.Name]++
-						}
-					}
-					switch x.Sel.Name {
-					case "NewRequest", "NewRequestWithContext", "Do", "RoundTrip", "Get":
-						if owner != "do" {
-							t.Errorf("%s: %s outside do; only do may build or send a request", fset.Position(x.Pos()), x.Sel.Name)
-						}
-					case "Post", "PostForm", "Head":
-						t.Errorf("%s: %s is a request shortcut; the write surface goes through do", fset.Position(x.Pos()), x.Sel.Name)
-					}
+				case *ast.Ident:
+					checkHTTPUse(t, fset, info, x, owner, inDo, writes)
 				case *ast.BasicLit:
 					if x.Kind == token.STRING {
 						if s, err := strconv.Unquote(x.Value); err == nil {
@@ -72,22 +124,38 @@ func TestWriteSurface(t *testing.T) {
 							}
 						}
 					}
-				case *ast.KeyValueExpr:
-					if id, ok := x.Key.(*ast.Ident); ok && id.Name == "Method" {
-						t.Errorf("%s: a composite literal sets a Method field; requests are built in do", fset.Position(x.Pos()))
+				case *ast.CallExpr:
+					callFuns[x.Fun] = true
+					if sel, ok := x.Fun.(*ast.SelectorExpr); ok {
+						callFuns[sel.Sel] = true
+					}
+					if isPkgDo(info, x.Fun, pkg) {
+						checkDoCall(t, fset, info, x, owner, posts)
 					}
 				case *ast.AssignStmt:
 					for _, l := range x.Lhs {
-						if sel, ok := l.(*ast.SelectorExpr); ok && sel.Sel.Name == "Method" {
-							t.Errorf("%s: assignment to a Method field", fset.Position(x.Pos()))
-						}
+						checkEmailVerifiedAssign(t, fset, info, l)
 					}
+				case *ast.IncDecStmt:
+					checkEmailVerifiedAssign(t, fset, info, x.X)
+				case *ast.UnaryExpr:
+					if x.Op == token.AND {
+						checkEmailVerifiedAssign(t, fset, info, x.X)
+					}
+				}
+				return true
+			})
+			ast.Inspect(decl, func(n ast.Node) bool {
+				if id, ok := n.(*ast.Ident); ok && isPkgDoObj(info.Uses[id], pkg) && !callFuns[id] {
+					t.Errorf("%s: do used other than by calling it", fset.Position(id.Pos()))
 				}
 				return true
 			})
 		}
 	}
-	structure(t, fset, parsed)
+	if !reflect.DeepEqual(posts, map[string]int{"CreateUser": 1, "SendLoginLink": 1}) {
+		t.Errorf("c.do(http.MethodPost) calls: got %v", posts)
+	}
 	want := map[string]int{"CreateUser:MethodPost": 1, "SendLoginLink:MethodPost": 1}
 	if !reflect.DeepEqual(writes, want) {
 		t.Fatalf("write surface changed: got %v, want %v", writes, want)
@@ -135,6 +203,153 @@ func TestWriteSurface(t *testing.T) {
 	sort.Strings(fields)
 	if !reflect.DeepEqual(fields, []string{"displayName", "email", "emailVerified", "username"}) {
 		t.Fatalf("createUserRequest fields changed: %v", fields)
+	}
+}
+
+// checkHTTPUse resolves id through the type checker and judges it if it is
+// something from net/http.
+func checkHTTPUse(t *testing.T, fset *token.FileSet, info *types.Info, id *ast.Ident, owner string, inDo bool, writes map[string]int) {
+	obj := info.Uses[id]
+	if !isNetHTTP(obj) {
+		return
+	}
+	pos := fset.Position(id.Pos())
+	switch o := obj.(type) {
+	case *types.Const:
+		if httpWriteConsts[o.Name()] {
+			writes[owner+":"+o.Name()]++
+		}
+	case *types.Var:
+		if o.IsField() && o.Name() == "Method" {
+			t.Errorf("%s: the Request.Method field is used; requests are built in do", pos)
+		}
+	case *types.Func:
+		recv := recvName(o)
+		switch {
+		case recv == "" && (o.Name() == "NewRequest" || o.Name() == "NewRequestWithContext"):
+			if !inDo {
+				t.Errorf("%s: http.%s outside (*Client).do", pos, o.Name())
+			}
+		case recv == "" && (o.Name() == "Get" || o.Name() == "Post" || o.Name() == "PostForm" || o.Name() == "Head"):
+			t.Errorf("%s: http.%s is a request shortcut", pos, o.Name())
+		case recv == "Client" && o.Name() == "Do":
+			if !inDo {
+				t.Errorf("%s: (*http.Client).Do outside (*Client).do", pos)
+			}
+		case recv == "Client" && (o.Name() == "Get" || o.Name() == "Post" || o.Name() == "PostForm" || o.Name() == "Head"):
+			t.Errorf("%s: (*http.Client).%s is a request shortcut", pos, o.Name())
+		case o.Name() == "RoundTrip":
+			t.Errorf("%s: RoundTrip called directly", pos)
+		}
+	}
+}
+
+func isPkgDoObj(o types.Object, pkg *types.Package) bool {
+	f, ok := o.(*types.Func)
+	return ok && f.Pkg() == pkg && f.Name() == "do" && recvName(f) == "Client"
+}
+
+func isPkgDo(info *types.Info, fun ast.Expr, pkg *types.Package) bool {
+	switch f := fun.(type) {
+	case *ast.SelectorExpr:
+		return isPkgDoObj(info.Uses[f.Sel], pkg)
+	case *ast.Ident:
+		return isPkgDoObj(info.Uses[f], pkg)
+	}
+	return false
+}
+
+// checkDoCall requires the method argument of a c.do call to be a net/http
+// Method constant written in place, GET everywhere except the two writes.
+func checkDoCall(t *testing.T, fset *token.FileSet, info *types.Info, call *ast.CallExpr, owner string, posts map[string]int) {
+	pos := fset.Position(call.Pos())
+	if len(call.Args) < 2 {
+		t.Errorf("%s: c.do arguments", pos)
+		return
+	}
+	sel, ok := call.Args[1].(*ast.SelectorExpr)
+	if !ok {
+		t.Errorf("%s: c.do must be given an http.Method* constant written in place", pos)
+		return
+	}
+	c, ok := info.Uses[sel.Sel].(*types.Const)
+	if !ok || !isNetHTTP(c) || !strings.HasPrefix(c.Name(), "Method") {
+		t.Errorf("%s: c.do must be given an http.Method* constant written in place", pos)
+		return
+	}
+	switch c.Name() {
+	case "MethodGet":
+	case "MethodPost":
+		posts[owner]++
+	default:
+		t.Errorf("%s: c.do with %s", pos, c.Name())
+	}
+}
+
+// checkDoBody holds (*Client).do to passing its own, never reassigned, method
+// parameter to http.NewRequestWithContext.
+func checkDoBody(t *testing.T, fset *token.FileSet, info *types.Info, fn *ast.FuncDecl) {
+	var param types.Object
+	for _, f := range fn.Type.Params.List {
+		for _, n := range f.Names {
+			if n.Name == "method" {
+				param = info.Defs[n]
+			}
+		}
+	}
+	if param == nil {
+		t.Errorf("%s: do has no method parameter", fset.Position(fn.Pos()))
+		return
+	}
+	refers := func(e ast.Expr) bool {
+		id, ok := e.(*ast.Ident)
+		return ok && (info.Uses[id] == param || info.Defs[id] == param)
+	}
+	requests := 0
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.AssignStmt:
+			for _, l := range x.Lhs {
+				if refers(l) {
+					t.Errorf("%s: do assigns to its method parameter", fset.Position(x.Pos()))
+				}
+			}
+		case *ast.IncDecStmt:
+			if refers(x.X) {
+				t.Errorf("%s: do modifies its method parameter", fset.Position(x.Pos()))
+			}
+		case *ast.UnaryExpr:
+			if x.Op == token.AND && refers(x.X) {
+				t.Errorf("%s: do takes the address of its method parameter", fset.Position(x.Pos()))
+			}
+		case *ast.RangeStmt:
+			if (x.Key != nil && refers(x.Key)) || (x.Value != nil && refers(x.Value)) {
+				t.Errorf("%s: do ranges into its method parameter", fset.Position(x.Pos()))
+			}
+		case *ast.CallExpr:
+			if sel, ok := x.Fun.(*ast.SelectorExpr); ok {
+				if f, ok := info.Uses[sel.Sel].(*types.Func); ok && isNetHTTP(f) && f.Name() == "NewRequestWithContext" {
+					requests++
+					if len(x.Args) < 2 || !refers(x.Args[1]) {
+						t.Errorf("%s: do must pass its method parameter to NewRequestWithContext", fset.Position(x.Pos()))
+					}
+				}
+			}
+		}
+		return true
+	})
+	if requests != 1 {
+		t.Errorf("do must build exactly one request, found %d", requests)
+	}
+}
+
+// checkEmailVerifiedAssign fails on any assignment to a field named
+// EmailVerified; the only approved setting is the literal in CreateUser.
+func checkEmailVerifiedAssign(t *testing.T, fset *token.FileSet, info *types.Info, lhs ast.Expr) {
+	if sel, ok := lhs.(*ast.SelectorExpr); ok {
+		if v, ok := info.Uses[sel.Sel].(*types.Var); ok && v.IsField() && v.Name() == "EmailVerified" {
+			t.Errorf("%s: EmailVerified assigned outside the createUserRequest literal", fset.Position(lhs.Pos()))
+		}
 	}
 }
 
@@ -310,84 +525,5 @@ func checkCreateLiteral(t *testing.T, fn *ast.FuncDecl) {
 	})
 	if n != 1 {
 		t.Fatalf("CreateUser must build exactly one createUserRequest, found %d", n)
-	}
-}
-
-// structure is the allowlist half of the test: who may build and send
-// requests, how do is called, and which methods the client exposes.
-func structure(t *testing.T, fset *token.FileSet, files []*ast.File) {
-	t.Helper()
-	exported := map[string]bool{"UsernameTaken": true, "EmailTaken": true, "FindUser": true, "AdminEmails": true, "CreateUser": true, "SendLoginLink": true}
-	posts := map[string]int{}
-	for _, file := range files {
-		for _, decl := range file.Decls {
-			fn, ok := decl.(*ast.FuncDecl)
-			if !ok {
-				continue
-			}
-			if fn.Name.IsExported() && !(fn.Recv == nil && fn.Name.Name == "New") && !(fn.Recv != nil && exported[fn.Name.Name]) {
-				t.Errorf("%s: exported %s is not part of the approved surface", fset.Position(fn.Pos()), fn.Name.Name)
-			}
-		}
-		for _, decl := range file.Decls {
-			owner := "<package>"
-			if fn, ok := decl.(*ast.FuncDecl); ok {
-				owner = fn.Name.Name
-			}
-			callFuns := map[ast.Expr]bool{}
-			ast.Inspect(decl, func(n ast.Node) bool {
-				call, ok := n.(*ast.CallExpr)
-				if !ok {
-					return true
-				}
-				callFuns[call.Fun] = true
-				if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
-					switch sel.Sel.Name {
-					case "do":
-						m := ast.Expr(nil)
-						if len(call.Args) > 1 {
-							m = call.Args[1]
-						}
-						ms, ok := m.(*ast.SelectorExpr)
-						id, isID := func() (*ast.Ident, bool) {
-							if !ok {
-								return nil, false
-							}
-							i, k := ms.X.(*ast.Ident)
-							return i, k
-						}()
-						if !ok || !isID || id.Name != "http" || !strings.HasPrefix(ms.Sel.Name, "Method") {
-							t.Errorf("%s: c.do must be given an http.Method* selector written in place", fset.Position(call.Pos()))
-							return true
-						}
-						switch ms.Sel.Name {
-						case "MethodGet":
-						case "MethodPost":
-							posts[owner]++
-						default:
-							t.Errorf("%s: c.do with %s", fset.Position(call.Pos()), ms.Sel.Name)
-						}
-					case "NewRequestWithContext":
-						if owner == "do" {
-							if len(call.Args) < 2 {
-								t.Errorf("%s: NewRequestWithContext arguments", fset.Position(call.Pos()))
-							} else if a, ok := call.Args[1].(*ast.Ident); !ok || a.Name != "method" {
-								t.Errorf("%s: do must pass its method parameter to NewRequestWithContext", fset.Position(call.Pos()))
-							}
-						}
-					}
-				}
-				return true
-			})
-			ast.Inspect(decl, func(n ast.Node) bool {
-				if sel, ok := n.(*ast.SelectorExpr); ok && sel.Sel.Name == "do" && !callFuns[sel] {
-					t.Errorf("%s: do used other than by calling it", fset.Position(sel.Pos()))
-				}
-				return true
-			})
-		}
-	}
-	if !reflect.DeepEqual(posts, map[string]int{"CreateUser": 1, "SendLoginLink": 1}) {
-		t.Errorf("c.do(http.MethodPost) calls: got %v", posts)
 	}
 }

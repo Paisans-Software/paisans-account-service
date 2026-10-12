@@ -378,3 +378,56 @@ func TestAdminDismissesUnsentLink(t *testing.T) {
 		t.Fatal(inv[0].State)
 	}
 }
+
+const hostile = `"><script>alert(1)</script>`
+
+// Values that come from people (a username in the session, an inviter's
+// username, an applicant's display name) are escaped on every page that
+// shows them.
+func TestHostileValuesEscapedOnEveryPage(t *testing.T) {
+	h := newHarness(t, true)
+	evil := Session{Sub: "s-evil", Username: hostile, CSRF: "tok", Exp: time.Now().Add(time.Hour).Unix()}
+	tok, _ := h.inviteAs(t, flow.Member{Sub: evil.Sub, Username: evil.Username})
+	inviteRec := httptest.NewRecorder()
+	h.h.ServeHTTP(inviteRec, httptest.NewRequest("GET", "/i/"+tok, nil))
+	if _, err := h.flow.Apply(context.Background(), tok, flow.Applicant{Username: "bob", Email: "bob@x.org", DisplayName: hostile, Agreed: true}); err != nil {
+		t.Fatal(err)
+	}
+	evilAdmin := evil
+	evilAdmin.Admin = true
+	for name, rec := range map[string]*httptest.ResponseRecorder{
+		"home":   h.as(evil, "GET", "/", nil),
+		"invite": inviteRec,
+		"admin":  h.as(evilAdmin, "GET", "/admin", nil),
+	} {
+		body := rec.Body.String()
+		if rec.Code != 200 || strings.Contains(body, "<script>") || !strings.Contains(body, "&lt;script&gt;alert(1)&lt;/script&gt;") {
+			t.Errorf("%s: %d %s", name, rec.Code, body)
+		}
+	}
+}
+
+// Every rendered page carries the content security policy.
+func TestRenderedPagesCarryCSP(t *testing.T) {
+	h := newHarness(t, true)
+	tok, _ := h.invite(t)
+	get := func(path string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		h.h.ServeHTTP(rec, httptest.NewRequest("GET", path, nil))
+		return rec
+	}
+	for name, rec := range map[string]*httptest.ResponseRecorder{
+		"home":     h.as(member, "GET", "/", nil),
+		"admin":    h.as(admin, "GET", "/admin", nil),
+		"invite":   get("/i/" + tok),
+		"unusable": get("/i/nope"),
+		"created":  h.as(admin, "POST", "/invites", createForm()),
+	} {
+		csp := rec.Header().Get("Content-Security-Policy")
+		for _, want := range []string{"default-src 'self'", "form-action 'self'", "frame-ancestors 'none'", "img-src 'self' https://id.example.org/api/application-images/logo"} {
+			if !strings.Contains(csp, want) {
+				t.Errorf("%s: CSP %q lacks %q", name, csp, want)
+			}
+		}
+	}
+}

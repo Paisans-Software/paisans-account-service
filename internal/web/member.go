@@ -79,8 +79,10 @@ func (s *server) revoke(w http.ResponseWriter, r *http.Request, sess Session) {
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
+// fail answers a request the service could not complete, almost always because
+// the database is unreachable: 503, and a page asking the person to retry.
 func (s *server) fail(w http.ResponseWriter, err error) {
 	slog.Error("request failed", "error", err)
-	s.Render.page(w, 500, "message.html", view{Title: "Something went wrong", Data: map[string]string{
+	s.Render.page(w, http.StatusServiceUnavailable, "message.html", view{Title: "Something went wrong", Data: map[string]string{
 		"Heading": "Something went wrong", "Body": "Please try again in a minute."}})
 }

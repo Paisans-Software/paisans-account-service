@@ -4,7 +4,6 @@ import (
 	"crypto/subtle"
 	"errors"
 	"html/template"
-	"log/slog"
 	"net/http"
 	"strings"
 
@@ -32,9 +31,7 @@ func (s *server) openFailed(w http.ResponseWriter, err error) {
 		s.unusable(w)
 		return
 	}
-	slog.Error("open invite failed", "error", err)
-	s.Render.page(w, http.StatusServiceUnavailable, "message.html", view{Title: "Something went wrong", Data: map[string]string{
-		"Heading": "Something went wrong", "Body": "Please try again in a minute."}})
+	s.fail(w, err)
 }
 
 func (s *server) invitePage(w http.ResponseWriter, r *http.Request) {

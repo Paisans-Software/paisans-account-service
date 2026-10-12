@@ -117,6 +117,22 @@ func TestDatabaseOutageIs503NotNeutral(t *testing.T) {
 	}
 }
 
+func TestDatabaseOutageIs503Everywhere(t *testing.T) {
+	h := newHarness(t, true)
+	tok, csrf := h.invite(t)
+	h.st.Close()
+	for name, rec := range map[string]*httptest.ResponseRecorder{
+		"home":   h.as(member, "GET", "/", nil),
+		"create": h.as(member, "POST", "/invites", url.Values{"csrf": {"tok"}}),
+		"admin":  h.as(admin, "GET", "/admin", nil),
+		"submit": post(h, "/i/"+tok, form(csrf)),
+	} {
+		if rec.Code != 503 || !strings.Contains(rec.Body.String(), "try again in a minute") {
+			t.Errorf("%s: %d", name, rec.Code)
+		}
+	}
+}
+
 func TestRefusedApplicationLeavesInviteUsable(t *testing.T) {
 	h := newHarness(t, true)
 	tok, csrf := h.invite(t)

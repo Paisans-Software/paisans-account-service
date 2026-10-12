@@ -186,7 +186,13 @@ func (s *Service) Apply(ctx context.Context, token string, in Applicant) (bool, 
 	}
 	slog.Info("write", "action", "application.create", "application_id", app.ID)
 	if !s.s.RequireApproval {
-		return true, s.approve(ctx, "", app)
+		err := s.approve(ctx, "", app)
+		if err == nil {
+			return true, nil
+		}
+		// The invite is spent, so the applicant is told to wait and the admins
+		// can retry from the pending list.
+		slog.Warn("automatic approval failed; left for an admin", "application_id", app.ID, "error", err)
 	}
 	if err := s.m.Send(ctx, []string{app.Email}, "We received your application",
 		"Thank you for agreeing to the code of conduct. An admin will review your application, and you will get another email when they have.\n"); err != nil {
@@ -246,23 +252,37 @@ func (s *Service) approve(ctx context.Context, adminSub string, app store.Applic
 		}
 		userID = u.ID
 	} else {
-		if err := s.available(ctx, app.Username, app.Email, true); err != nil {
-			return err
-		}
-		u, err := s.p.CreateUser(ctx, idp.NewUser{Username: app.Username, Email: app.Email, DisplayName: app.DisplayName})
+		// A previous attempt may have created the account and then failed to
+		// record it. An account with this username and this applicant's email
+		// is that account, not a clash.
+		u, found, err := s.p.FindUser(ctx, app.Username)
 		if err != nil {
 			return err
 		}
-		userID = u.ID
-		s.audit(ctx, adminSub, "idp.user_create", app.ID)
+		if found && strings.EqualFold(strings.TrimSpace(u.Email), app.Email) {
+			userID = u.ID
+		} else {
+			if err := s.available(ctx, app.Username, app.Email, true); err != nil {
+				return err
+			}
+			u, err := s.p.CreateUser(ctx, idp.NewUser{Username: app.Username, Email: app.Email, DisplayName: app.DisplayName})
+			if err != nil {
+				return err
+			}
+			userID = u.ID
+			s.audit(ctx, adminSub, "idp.user_create", app.ID)
+			slog.Info("write", "action", "idp.user_create", "application_id", app.ID)
+		}
 		if err := s.st.MarkLinkUnsent(ctx, app.ID, userID, adminSub); err != nil {
 			return err
 		}
+		slog.Info("write", "action", "application.link_unsent", "application_id", app.ID)
 	}
 	if err := s.p.SendLoginLink(ctx, userID); err != nil {
 		return fmt.Errorf("the account exists but its sign-in link was not sent; retry: %w", err)
 	}
 	s.audit(ctx, adminSub, "idp.login_link", app.ID)
+	slog.Info("write", "action", "idp.login_link", "application_id", app.ID)
 	if err := s.st.CompleteApplication(ctx, app.ID, adminSub); err != nil {
 		return err
 	}
@@ -286,7 +306,10 @@ func (s *Service) Decline(ctx context.Context, admin Member, id int64) error {
 		"Thank you for your interest. Your application to join was not accepted.\n"); err != nil {
 		slog.Warn("could not tell the invitee of a decline", "error", err)
 	}
-	if inviter, found, err := s.p.FindUser(ctx, app.InviterUsername); err == nil && found && inviter.Email != "" {
+	inviter, found, err := s.p.FindUser(ctx, app.InviterUsername)
+	if err != nil {
+		slog.Warn("could not look up the inviter of a declined application", "application_id", id, "error", err)
+	} else if found && inviter.Email != "" {
 		if err := s.m.Send(ctx, []string{inviter.Email}, "An invite you sent was declined",
 			"An application made with one of your invites was declined. Your invite slot is free again.\n"); err != nil {
 			slog.Warn("could not tell the inviter of a decline", "error", err)

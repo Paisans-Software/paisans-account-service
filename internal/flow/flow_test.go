@@ -181,3 +181,56 @@ func TestNonAdminCannotDecide(t *testing.T) {
 		t.Fatal("members cannot approve")
 	}
 }
+
+func TestApprovalOffProviderFailureLeavesApplicationPending(t *testing.T) {
+	s, f, m := setup(t, false)
+	f.FailCreate = errors.New("pocket id down")
+	link, _, _ := s.CreateInvite(ctx, alice)
+	now, err := s.Apply(ctx, token(t, link), bob())
+	if now || err != nil {
+		t.Fatalf("now=%v err=%v", now, err)
+	}
+	if len(m.To("bob@example.org")) != 1 || len(m.To("root@x.org")) != 1 {
+		t.Fatal("applicant and admins are told")
+	}
+	p, _ := s.Pending(ctx)
+	if len(p) != 1 {
+		t.Fatalf("pending: %d", len(p))
+	}
+	f.FailCreate = nil
+	if err := s.Approve(ctx, root, p[0].ID); err != nil || f.Created != 1 {
+		t.Fatalf("err=%v created=%d", err, f.Created)
+	}
+}
+
+func TestApproveAdoptsAccountItAlreadyCreated(t *testing.T) {
+	s, f, _ := setup(t, true)
+	link, _, _ := s.CreateInvite(ctx, alice)
+	s.Apply(ctx, token(t, link), bob())
+	// The account exists with the applicant's email, as after a crash between
+	// creating it and recording it.
+	f.Users = append(f.Users, idp.User{ID: "prev", Username: "bob", Email: "BOB@example.org"})
+	p, _ := s.Pending(ctx)
+	if err := s.Approve(ctx, root, p[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	if f.Created != 0 || f.LinksSent != 1 {
+		t.Fatalf("created=%d links=%d", f.Created, f.LinksSent)
+	}
+}
+
+func TestProviderDownAtApplyStoresApplication(t *testing.T) {
+	s, f, _ := setup(t, true)
+	f.FailLookup = errors.New("pocket id down")
+	link, _, _ := s.CreateInvite(ctx, alice)
+	if _, err := s.Apply(ctx, token(t, link), bob()); err != nil {
+		t.Fatal(err)
+	}
+	p, _ := s.Pending(ctx)
+	if len(p) != 1 {
+		t.Fatalf("pending: %d", len(p))
+	}
+	if err := s.Approve(ctx, root, p[0].ID); err == nil || f.Created != 0 {
+		t.Fatalf("approval needs the provider: err=%v created=%d", err, f.Created)
+	}
+}

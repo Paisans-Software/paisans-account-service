@@ -4,6 +4,7 @@ package mail
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 
@@ -37,25 +38,42 @@ func NewSMTP(c config.SMTP) (Sender, error) {
 	return &smtpSender{c: c, opts: opts}, nil
 }
 
+// Send attempts every recipient, so one bad address does not stop the rest.
+// Errors are fixed text: go-mail's own errors carry recipient addresses and
+// the server's reply, which must not reach a log.
 func (s *smtpSender) Send(ctx context.Context, to []string, subject, body string) error {
 	client, err := gomail.NewClient(s.c.Host, s.opts...)
 	if err != nil {
-		return err
+		return errors.New("mail client could not be set up")
 	}
+	var errs []error
 	for _, rcpt := range to {
 		m := gomail.NewMsg()
 		if err := m.From(s.c.From); err != nil {
-			return err
+			return errors.New("sender address rejected")
 		}
 		if err := m.To(rcpt); err != nil {
-			return fmt.Errorf("recipient address rejected")
+			errs = append(errs, errors.New("recipient address rejected"))
+			continue
 		}
 		m.Subject(subject)
 		m.SetBodyString(gomail.TypeTextPlain, body)
 		if err := client.DialAndSendWithContext(ctx, m); err != nil {
-			return fmt.Errorf("send mail: %w", err)
+			errs = append(errs, sanitize(err))
 		}
+	}
+	if len(errs) > 0 {
+		return errors.Join(errs...)
 	}
 	slog.Info("mail sent", "subject", subject, "recipients", len(to))
 	return nil
+}
+
+// sanitize reduces a send error to a reason and a numeric code.
+func sanitize(err error) error {
+	var se *gomail.SendError
+	if errors.As(err, &se) {
+		return fmt.Errorf("send mail: %s (code %d)", se.Reason, se.ErrorCode())
+	}
+	return errors.New("send mail: delivery failed")
 }

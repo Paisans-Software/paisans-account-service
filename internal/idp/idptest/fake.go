@@ -16,17 +16,22 @@ type Fake struct {
 	mu                       sync.Mutex
 	Users                    []idp.User
 	FailCreate, FailSendLink error
-	Created, LinksSent       int
+	// FailLookup makes every read fail, as an unreachable provider would.
+	FailLookup         error
+	Created, LinksSent int
 }
 
 func (f *Fake) UsernameTaken(_ context.Context, n string) (bool, error) {
-	_, ok, _ := f.FindUser(context.Background(), n)
-	return ok, nil
+	_, ok, err := f.FindUser(context.Background(), n)
+	return ok, err
 }
 
 func (f *Fake) EmailTaken(_ context.Context, e string) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.FailLookup != nil {
+		return false, f.FailLookup
+	}
 	for _, u := range f.Users {
 		if strings.EqualFold(u.Email, strings.TrimSpace(e)) {
 			return true, nil
@@ -38,6 +43,9 @@ func (f *Fake) EmailTaken(_ context.Context, e string) (bool, error) {
 func (f *Fake) FindUser(_ context.Context, n string) (idp.User, bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.FailLookup != nil {
+		return idp.User{}, false, f.FailLookup
+	}
 	for _, u := range f.Users {
 		if strings.EqualFold(u.Username, n) {
 			return u, true, nil
@@ -49,6 +57,9 @@ func (f *Fake) FindUser(_ context.Context, n string) (idp.User, bool, error) {
 func (f *Fake) AdminEmails(context.Context) ([]string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.FailLookup != nil {
+		return nil, f.FailLookup
+	}
 	var out []string
 	for _, u := range f.Users {
 		if u.IsAdmin && u.Email != "" {

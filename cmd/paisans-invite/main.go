@@ -96,16 +96,21 @@ func run() error {
 	go sweep(ctx, st, cfg)
 
 	srv := &http.Server{Addr: cfg.ListenAddr, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		<-ctx.Done()
 		shut, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		srv.Shutdown(shut)
+		if err := srv.Shutdown(shut); err != nil {
+			slog.Warn("shutdown", "error", err)
+		}
 	}()
 	slog.Info("listening", "addr", cfg.ListenAddr, "coc_version", c.Version, "require_approval", cfg.RequireApproval)
 	if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
+	<-done
 	return nil
 }
 

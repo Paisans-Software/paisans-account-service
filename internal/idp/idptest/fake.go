@@ -30,6 +30,8 @@ type Fake struct {
 	// OnSendLink, if set, runs at the start of SendLoginLink, outside the
 	// lock, so a test can act while a link is being sent.
 	OnSendLink func()
+	// AfterSendLink, if set, runs once SendLoginLink has sent, outside the lock.
+	AfterSendLink func()
 }
 
 func (f *Fake) UsernameTaken(_ context.Context, n string) (bool, error) {
@@ -112,5 +114,10 @@ func (f *Fake) SendLoginLink(context.Context, string) error {
 		return f.FailSendLink
 	}
 	f.LinksSent++
+	if after := f.AfterSendLink; after != nil {
+		f.mu.Unlock()
+		after()
+		f.mu.Lock()
+	}
 	return nil
 }

@@ -31,16 +31,22 @@ var _ idp.Provider = (*Client)(nil)
 // maxPages bounds a listing so a misbehaving server cannot hold a request open.
 const maxPages = 100
 
+// maxLinkTTL is the longest sign-in link Pocket ID accepts.
+const maxLinkTTL = 744 * time.Hour
+
 // New copies hc so that a redirect is an error: the API key header must never
 // follow a 3xx to another place. linkTTL is the lifetime of every sign-in link
-// the client sends.
-func New(baseURL, apiKey string, hc *http.Client, linkTTL time.Duration) *Client {
+// the client sends: a whole number of hours from 1h to 744h, or New refuses.
+func New(baseURL, apiKey string, hc *http.Client, linkTTL time.Duration) (*Client, error) {
+	if linkTTL < time.Hour || linkTTL > maxLinkTTL || linkTTL%time.Hour != 0 {
+		return nil, errors.New("identity provider: the sign-in link lifetime must be a whole number of hours from 1h to 744h")
+	}
 	var cp http.Client
 	if hc != nil {
 		cp = *hc
 	}
 	cp.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	return &Client{base: strings.TrimRight(baseURL, "/"), key: apiKey, hc: &cp, linkTTL: linkTTL}
+	return &Client{base: strings.TrimRight(baseURL, "/"), key: apiKey, hc: &cp, linkTTL: linkTTL}, nil
 }
 
 // withoutURL drops the *url.Error wrapper, whose message carries the whole

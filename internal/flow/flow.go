@@ -285,7 +285,10 @@ func (s *Service) approve(ctx context.Context, adminSub string, app store.Applic
 	slog.Info("write", "action", "application.claim", "application_id", app.ID)
 	userID, err := s.accountFor(ctx, adminSub, claimed, claim)
 	if err != nil {
-		if !lostClaim(err) {
+		// An account that exists but is not recorded keeps the claim: the
+		// application stays approving, to be adopted by a later approval once
+		// the claim is stale, or dismissed; never declined or swept.
+		if !lostClaim(err) && !errors.Is(err, errAccountUnrecorded) {
 			s.release(ctx, adminSub, app.ID, claim)
 		}
 		return err
@@ -296,6 +299,9 @@ func (s *Service) approve(ctx context.Context, adminSub string, app store.Applic
 		s.release(ctx, adminSub, app.ID, claim)
 		return fmt.Errorf("the account exists but its sign-in link was not sent; retry: %w", err)
 	}
+	// The link is sent: what follows records it, and must not be cut short by
+	// the request going away, or the row would stay link_unsent and claimed.
+	ctx = context.WithoutCancel(ctx)
 	s.audit(ctx, adminSub, "idp.login_link", app.ID, "")
 	slog.Info("write", "action", "idp.login_link", "application_id", app.ID)
 	if err := s.st.CompleteApplication(ctx, app.ID, claim, adminSub); err != nil {
@@ -351,11 +357,17 @@ func (s *Service) createAccount(ctx context.Context, adminSub string, app store.
 			slog.Warn("approval lost its claim; stopping without sending a link", "application_id", app.ID)
 			return "", store.ErrBusy
 		}
-		return "", err
+		slog.Error("account exists at the identity provider but could not be recorded; the claim is kept",
+			"application_id", app.ID, "error", err)
+		return "", fmt.Errorf("%w: %w", errAccountUnrecorded, err)
 	}
 	slog.Info("write", "action", "application.link_unsent", "application_id", app.ID)
 	return userID, nil
 }
+
+// errAccountUnrecorded is an account created (or adopted) at the provider that
+// the store could not record.
+var errAccountUnrecorded = errors.New("the account was created but could not be recorded; approve again in ten minutes, or dismiss")
 
 // lostClaim reports a claim-guarded write that found the claim no longer held:
 // taken over by another approval, or the application gone.

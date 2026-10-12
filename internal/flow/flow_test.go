@@ -490,3 +490,71 @@ func TestPendingMarksStaleApprovals(t *testing.T) {
 		t.Fatal("an old claim is stale")
 	}
 }
+
+// A request that goes away once the link is sent still completes the
+// application, so it is not left link_unsent with its claim held.
+func TestCancelAfterSendStillCompletes(t *testing.T) {
+	s, f, _, st := setupStore(t, true)
+	link, _, _ := s.CreateInvite(ctx, alice, flow.NewNonce())
+	s.Apply(ctx, token(t, link), bob())
+	p, _ := s.Pending(ctx)
+	cctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	f.AfterSendLink = cancel
+	if err := s.Approve(cctx, root, p[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	if p, _ := s.Pending(ctx); len(p) != 0 || f.LinksSent != 1 {
+		t.Fatalf("pending %d, links %d", len(p), f.LinksSent)
+	}
+	if got, _ := st.AuditSubjects(ctx, "application.complete"); len(got) != 1 {
+		t.Fatalf("complete audit: %v", got)
+	}
+}
+
+// An account the store could not record keeps its claim: the application stays
+// approving, so it cannot be declined or swept with an untracked account.
+func TestUnrecordedAccountKeepsClaim(t *testing.T) {
+	s, f, _, st := setupStore(t, true)
+	link, _, _ := s.CreateInvite(ctx, alice, flow.NewNonce())
+	s.Apply(ctx, token(t, link), bob())
+	p, _ := s.Pending(ctx)
+	conn := storetest.Conn(t, st)
+	// A store fault that hits only the recording: the move to link_unsent.
+	f.AfterCreate = func() {
+		if _, err := conn.Exec(ctx, `CREATE FUNCTION refuse_link_unsent() RETURNS trigger LANGUAGE plpgsql AS $$
+			BEGIN IF NEW.state = 'link_unsent' THEN RAISE EXCEPTION 'store fault'; END IF; RETURN NEW; END $$;
+			CREATE TRIGGER refuse_link_unsent BEFORE UPDATE ON applications FOR EACH ROW EXECUTE FUNCTION refuse_link_unsent()`); err != nil {
+			t.Error(err)
+		}
+	}
+	if err := s.Approve(ctx, root, p[0].ID); err == nil || errors.Is(err, store.ErrBusy) {
+		t.Fatalf("want the store fault, got %v", err)
+	}
+	if f.Created != 1 || f.LinksSent != 0 {
+		t.Fatalf("created=%d links=%d", f.Created, f.LinksSent)
+	}
+	var state string
+	var claimed bool
+	if err := conn.QueryRow(ctx, `SELECT state, claim_token IS NOT NULL FROM applications WHERE id=$1`, p[0].ID).Scan(&state, &claimed); err != nil {
+		t.Fatal(err)
+	}
+	if state != "approving" || !claimed {
+		t.Fatalf("state %q, claimed %v", state, claimed)
+	}
+	if err := s.Decline(ctx, root, p[0].ID); !errors.Is(err, store.ErrBusy) {
+		t.Fatalf("decline: %v", err)
+	}
+	// Once the fault is gone and the claim is stale, a later approval adopts
+	// the account instead of creating a second.
+	if _, err := conn.Exec(ctx, `DROP TRIGGER refuse_link_unsent ON applications;
+		UPDATE applications SET claimed_at = claimed_at - interval '11 minutes'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Approve(ctx, root, p[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	if f.Created != 1 || f.LinksSent != 1 {
+		t.Fatalf("created=%d links=%d", f.Created, f.LinksSent)
+	}
+}

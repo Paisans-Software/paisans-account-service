@@ -69,10 +69,11 @@ func (s *server) createInvite(w http.ResponseWriter, r *http.Request, sess Sessi
 
 func (s *server) revoke(w http.ResponseWriter, r *http.Request, sess Session) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err == nil {
-		err = s.Flow.Revoke(r.Context(), sess.member(), id)
+	if err != nil {
+		http.Error(w, "Bad request", http.StatusBadRequest)
+		return
 	}
-	if err != nil && !errors.Is(err, store.ErrNotFound) {
+	if err := s.Flow.Revoke(r.Context(), sess.member(), id); err != nil && !errors.Is(err, store.ErrNotFound) {
 		s.fail(w, err)
 		return
 	}

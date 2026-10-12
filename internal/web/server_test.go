@@ -253,3 +253,13 @@ func TestAdminErrorBannerIsServerOwned(t *testing.T) {
 		t.Fatal("mapped sentence missing")
 	}
 }
+
+func TestRevokeBadIDIs400(t *testing.T) {
+	h := newHarness(t, true)
+	for _, id := range []string{"abc", "1x", "99999999999999999999"} {
+		rec := h.as(member, "POST", "/invites/"+id+"/revoke", url.Values{"csrf": {"tok"}})
+		if rec.Code != 400 || !strings.Contains(rec.Body.String(), "Bad request") {
+			t.Errorf("%s: %d %s", id, rec.Code, rec.Body.String())
+		}
+	}
+}

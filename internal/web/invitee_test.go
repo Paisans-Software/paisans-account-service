@@ -51,7 +51,7 @@ func TestBadTokenIsNeutral(t *testing.T) {
 	h := newHarness(t, true)
 	rec := httptest.NewRecorder()
 	h.h.ServeHTTP(rec, httptest.NewRequest("GET", "/i/nope", nil))
-	if rec.Code != 404 || !strings.Contains(rec.Body.String(), "can't be used") {
+	if rec.Code != 404 || !strings.Contains(rec.Body.String(), "can&#39;t be used") {
 		t.Fatalf("%d", rec.Code)
 	}
 }

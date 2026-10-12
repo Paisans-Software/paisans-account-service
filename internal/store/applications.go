@@ -78,7 +78,7 @@ func (s *Store) Application(ctx context.Context, id int64) (Application, error) 
 }
 
 func (s *Store) PendingApplications(ctx context.Context) ([]Application, error) {
-	rows, err := s.pool.Query(ctx, `SELECT `+appColumns+` FROM applications a JOIN invites i ON i.id=a.invite_id ORDER BY a.agreed_at`)
+	rows, err := s.pool.Query(ctx, `SELECT `+appColumns+` FROM applications a JOIN invites i ON i.id=a.invite_id ORDER BY a.agreed_at, a.id`)
 	if err != nil {
 		return nil, err
 	}

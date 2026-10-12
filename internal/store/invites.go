@@ -81,7 +81,7 @@ func (s *Store) CreateInvite(ctx context.Context, tokenHash []byte, inviterSub, 
 
 func (s *Store) ListInvites(ctx context.Context, inviterSub string) ([]Invite, error) {
 	rows, err := s.pool.Query(ctx, `SELECT id, inviter_sub, inviter_username, created_at, expires_at, state
-		FROM invites WHERE inviter_sub=$1 ORDER BY created_at DESC`, inviterSub)
+		FROM invites WHERE inviter_sub=$1 ORDER BY created_at DESC, id DESC`, inviterSub)
 	if err != nil {
 		return nil, err
 	}

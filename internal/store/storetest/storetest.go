@@ -27,13 +27,15 @@ func New(t *testing.T) *store.Store {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Registered before the schema exists, so a failure part-way still
+	// closes the connection and drops whatever was made.
+	t.Cleanup(func() {
+		admin.Exec(context.Background(), "DROP SCHEMA IF EXISTS "+schema+" CASCADE")
+		admin.Close(context.Background())
+	})
 	if _, err := admin.Exec(ctx, "CREATE SCHEMA "+schema); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() {
-		admin.Exec(context.Background(), "DROP SCHEMA "+schema+" CASCADE")
-		admin.Close(context.Background())
-	})
 	u, err := url.Parse(base)
 	if err != nil {
 		t.Fatal(err)

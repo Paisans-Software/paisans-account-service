@@ -5,6 +5,7 @@ import (
 	"context"
 	"embed"
 	"fmt"
+	"log/slog"
 	"sort"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -39,7 +40,16 @@ func (s *Store) Migrate(ctx context.Context) error {
 	if _, err := conn.Exec(ctx, `SELECT pg_advisory_lock($1)`, migrateLock); err != nil {
 		return err
 	}
-	defer conn.Exec(context.Background(), `SELECT pg_advisory_unlock($1)`, migrateLock)
+	defer func() {
+		// A session lock that is not released would stay with the pooled
+		// connection and block every later migration; closing the connection
+		// ends the session and releases it.
+		var unlocked bool
+		if err := conn.QueryRow(context.Background(), `SELECT pg_advisory_unlock($1)`, migrateLock).Scan(&unlocked); err != nil || !unlocked {
+			slog.Warn("could not release the migration lock; closing its connection", "error", err)
+			conn.Conn().Close(context.Background())
+		}
+	}()
 	if _, err := conn.Exec(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (name text PRIMARY KEY)`); err != nil {
 		return err
 	}

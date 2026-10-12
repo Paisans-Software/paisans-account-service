@@ -394,3 +394,150 @@ func TestTakenOverClaimWritesNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// auditOnce fails unless exactly one audit row for action names id.
+func auditOnce(t *testing.T, s *store.Store, action string, id int64) {
+	t.Helper()
+	got, err := s.AuditSubjects(ctx, action)
+	if err != nil || len(got) != 1 || got[0] != fmt.Sprint(id) {
+		t.Fatalf("%s: want one row naming %d, got %v %v", action, id, got, err)
+	}
+}
+
+// Every mutating store method writes its own audit row, naming the record by
+// its ID.
+func TestEveryWriteIsAudited(t *testing.T) {
+	s := storetest.New(t)
+	now := time.Now()
+	exp := now.Add(time.Hour)
+	inv, _ := s.CreateInvite(ctx, hash("a"), "sub", "alice", fresh(), exp, 0)
+	auditOnce(t, s, "invite.create", inv.ID)
+
+	r, _ := s.CreateInvite(ctx, hash("r"), "other", "carol", fresh(), exp, 0)
+	if err := s.RevokeInvite(ctx, r.ID, "other"); err != nil {
+		t.Fatal(err)
+	}
+	auditOnce(t, s, "invite.revoke", r.ID)
+
+	a, err := s.Apply(ctx, hash("a"), now, newApp("bob"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	auditOnce(t, s, "application.create", a.ID)
+
+	_, claim, _ := s.ClaimApplication(ctx, a.ID, "admin", now)
+	auditOnce(t, s, "application.claim", a.ID)
+	if err := s.ReleaseClaim(ctx, a.ID, claim, "admin"); err != nil {
+		t.Fatal(err)
+	}
+	auditOnce(t, s, "application.release", a.ID)
+
+	_, claim, _ = s.ClaimApplication(ctx, a.ID, "admin", now)
+	if err := s.MarkLinkUnsent(ctx, a.ID, claim, "idp-1", "admin"); err != nil {
+		t.Fatal(err)
+	}
+	auditOnce(t, s, "application.link_unsent", a.ID)
+	if err := s.CompleteApplication(ctx, a.ID, "", "admin"); err != nil {
+		t.Fatal(err)
+	}
+	auditOnce(t, s, "application.complete", a.ID)
+
+	s.CreateInvite(ctx, hash("d"), "sub", "alice", fresh(), exp, 0)
+	d, _ := s.Apply(ctx, hash("d"), now, newApp("dan"))
+	if err := s.DeclineApplication(ctx, d.ID, "admin", hash("dan")); err != nil {
+		t.Fatal(err)
+	}
+	auditOnce(t, s, "application.decline", d.ID)
+
+	if err := s.Audit(ctx, "admin", "idp.login_link", "42"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.AuditSubjects(ctx, "idp.login_link"); len(got) != 1 || got[0] != "42" {
+		t.Fatalf("Audit: %v", got)
+	}
+}
+
+func TestMarkLinkUnsent(t *testing.T) {
+	s := storetest.New(t)
+	now := time.Now()
+	s.CreateInvite(ctx, hash("a"), "sub", "alice", fresh(), now.Add(time.Hour), 3)
+	a, _ := s.Apply(ctx, hash("a"), now, newApp("bob"))
+	_, claim, _ := s.ClaimApplication(ctx, a.ID, "admin", now)
+	if err := s.MarkLinkUnsent(ctx, a.ID, claim, "idp-7", "admin"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Application(ctx, a.ID)
+	if err != nil || got.State != "link_unsent" || got.IDPUserID != "idp-7" {
+		t.Fatalf("%+v %v", got, err)
+	}
+	if err := s.MarkLinkUnsent(ctx, a.ID, claim, "idp-8", "admin"); !errors.Is(err, store.ErrBusy) {
+		t.Fatalf("a link_unsent application is not marked again: %v", err)
+	}
+	if _, _, err := s.ClaimApplication(ctx, a.ID, "admin", now.Add(time.Hour)); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("a link_unsent application cannot be claimed: %v", err)
+	}
+	if got, _ := s.Application(ctx, a.ID); got.IDPUserID != "idp-7" {
+		t.Fatalf("recorded account changed: %+v", got)
+	}
+}
+
+// Rows that share a timestamp come back in a fixed order: invites newest
+// first by id, applications oldest first by id.
+func TestListOrderIsDeterministic(t *testing.T) {
+	s := storetest.New(t)
+	now := time.Now()
+	var ids []int64
+	for i := 0; i < 4; i++ {
+		inv, _ := s.CreateInvite(ctx, hash(fmt.Sprint("o", i)), "sub", "alice", fresh(), now.Add(time.Hour), 0)
+		ids = append(ids, inv.ID)
+	}
+	conn := storetest.Conn(t, s)
+	if _, err := conn.Exec(ctx, `UPDATE invites SET created_at = $1`, now); err != nil {
+		t.Fatal(err)
+	}
+	list, _ := s.ListInvites(ctx, "sub")
+	for i, inv := range list {
+		if inv.ID != ids[len(ids)-1-i] {
+			t.Fatalf("invites not newest-first by id: %v", list)
+		}
+	}
+	if _, err := conn.Exec(ctx, `UPDATE invites SET created_at = $1 WHERE id=$2`, now.Add(time.Minute), ids[0]); err != nil {
+		t.Fatal(err)
+	}
+	if list, _ := s.ListInvites(ctx, "sub"); list[0].ID != ids[0] {
+		t.Fatalf("the newest invite comes first: %v", list)
+	}
+	var apps []int64
+	for i := 0; i < 3; i++ {
+		a, err := s.Apply(ctx, hash(fmt.Sprint("o", i)), now, newApp(fmt.Sprint("u", i)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		apps = append(apps, a.ID)
+	}
+	pending, _ := s.PendingApplications(ctx)
+	for i, a := range pending {
+		if a.ID != apps[i] {
+			t.Fatalf("applications not oldest-first by id: %v", pending)
+		}
+	}
+}
+
+func TestRevokeOnlyOpen(t *testing.T) {
+	s := storetest.New(t)
+	exp := time.Now().Add(time.Hour)
+	applied, _ := s.CreateInvite(ctx, hash("a"), "sub", "alice", fresh(), exp, 0)
+	s.Apply(ctx, hash("a"), time.Now(), newApp("bob"))
+	revoked, _ := s.CreateInvite(ctx, hash("r"), "sub", "alice", fresh(), exp, 0)
+	if err := s.RevokeInvite(ctx, revoked.ID, "sub"); err != nil {
+		t.Fatal(err)
+	}
+	for name, id := range map[string]int64{"applied": applied.ID, "revoked": revoked.ID} {
+		if err := s.RevokeInvite(ctx, id, "sub"); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	if got, _ := s.AuditSubjects(ctx, "invite.revoke"); len(got) != 1 {
+		t.Fatalf("a refused revoke writes no audit row: %v", got)
+	}
+}

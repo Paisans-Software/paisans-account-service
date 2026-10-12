@@ -3,6 +3,7 @@ package flow_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -21,6 +22,11 @@ var alice = flow.Member{Sub: "s-alice", Username: "alice"}
 var root = flow.Member{Sub: "s-root", Username: "root", Admin: true}
 
 func setup(t *testing.T, approval bool) (*flow.Service, *idptest.Fake, *mailtest.Recorder) {
+	s, f, m, _ := setupStore(t, approval)
+	return s, f, m
+}
+
+func setupStore(t *testing.T, approval bool) (*flow.Service, *idptest.Fake, *mailtest.Recorder, *store.Store) {
 	st := storetest.New(t)
 	f := &idptest.Fake{Users: []idp.User{{ID: "r", Username: "root", Email: "root@x.org"}}, Groups: map[string][]string{"admins": {"root"}}}
 	m := &mailtest.Recorder{}
@@ -28,7 +34,7 @@ func setup(t *testing.T, approval bool) (*flow.Service, *idptest.Fake, *mailtest
 		Quota: 2, RequireApproval: approval, InviteLifetime: 14 * 24 * time.Hour,
 		PublicURL: "https://invite.example.org", EmailHashKey: make([]byte, 32), AdminGroup: "admins",
 	}, time.Now)
-	return s, f, m
+	return s, f, m, st
 }
 
 func token(t *testing.T, link string) string {
@@ -302,5 +308,20 @@ func TestFailedCreateReleasesClaim(t *testing.T) {
 	f.FailCreate = nil
 	if err := s.Approve(ctx, root, p[0].ID); err != nil || f.Created != 1 {
 		t.Fatalf("err=%v created=%d", err, f.Created)
+	}
+}
+
+func TestAccountCreationAuditNamesTheAccount(t *testing.T) {
+	s, _, _, st := setupStore(t, true)
+	link, _, _ := s.CreateInvite(ctx, alice)
+	s.Apply(ctx, token(t, link), bob())
+	p, _ := s.Pending(ctx)
+	if err := s.Approve(ctx, root, p[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	got, err := st.AuditSubjects(ctx, "idp.user_create")
+	want := fmt.Sprintf("%d idp=id-1", p[0].ID)
+	if err != nil || len(got) != 1 || got[0] != want {
+		t.Fatalf("want [%s], got %v %v", want, got, err)
 	}
 }

@@ -272,7 +272,7 @@ func (s *Service) approve(ctx context.Context, adminSub string, app store.Applic
 	if err := s.p.SendLoginLink(ctx, userID); err != nil {
 		return fmt.Errorf("the account exists but its sign-in link was not sent; retry: %w", err)
 	}
-	s.audit(ctx, adminSub, "idp.login_link", app.ID)
+	s.audit(ctx, adminSub, "idp.login_link", app.ID, "")
 	slog.Info("write", "action", "idp.login_link", "application_id", app.ID)
 	if err := s.st.CompleteApplication(ctx, app.ID, adminSub); err != nil {
 		return err
@@ -301,7 +301,7 @@ func (s *Service) createAccount(ctx context.Context, adminSub string, app store.
 			return "", err
 		}
 		userID = u.ID
-		s.audit(ctx, adminSub, "idp.user_create", app.ID)
+		s.audit(ctx, adminSub, "idp.user_create", app.ID, " idp="+userID)
 		slog.Info("write", "action", "idp.user_create", "application_id", app.ID)
 	}
 	if err := s.st.MarkLinkUnsent(ctx, app.ID, userID, adminSub); err != nil {
@@ -350,9 +350,10 @@ func (s *Service) Decline(ctx context.Context, admin Member, id int64) error {
 }
 
 // audit records a provider write that has already happened, so a failure to
-// record it is logged rather than allowed to abort the flow.
-func (s *Service) audit(ctx context.Context, actorSub, action string, id int64) {
-	if err := s.st.Audit(ctx, actorSub, action, fmt.Sprint(id)); err != nil {
+// record it is logged rather than allowed to abort the flow. The subject is the
+// application ID followed by extra, which may only hold further IDs.
+func (s *Service) audit(ctx context.Context, actorSub, action string, id int64, extra string) {
+	if err := s.st.Audit(ctx, actorSub, action, fmt.Sprint(id)+extra); err != nil {
 		slog.Warn("could not audit a provider write", "action", action, "application_id", id, "error", err)
 	}
 }

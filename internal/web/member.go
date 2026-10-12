@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/paisans-software/paisans-invite/internal/flow"
 	"github.com/paisans-software/paisans-invite/internal/store"
 )
 
@@ -14,7 +15,11 @@ type homeData struct {
 	Invites          []store.Invite
 	NewLink, Expires string
 	Remaining        string
+	// Nonce is the create form's one-time value, fresh on every render.
+	Nonce string
 }
+
+const alreadyMade = "That invite was already made. It's in your list below. If you didn't copy the link, revoke it and make a new one."
 
 func (s *server) homeView(r *http.Request, sess Session, extra homeData) (homeData, error) {
 	invites, err := s.Flow.Invites(r.Context(), sess.member())
@@ -22,6 +27,7 @@ func (s *server) homeView(r *http.Request, sess Session, extra homeData) (homeDa
 		return homeData{}, err
 	}
 	extra.Invites = invites
+	extra.Nonce = flow.NewNonce()
 	if sess.Admin {
 		extra.Remaining = "As an admin you can make as many invites as you need."
 	} else {
@@ -46,10 +52,15 @@ func (s *server) home(w http.ResponseWriter, r *http.Request, sess Session) {
 }
 
 func (s *server) createInvite(w http.ResponseWriter, r *http.Request, sess Session) {
-	link, inv, err := s.Flow.CreateInvite(r.Context(), sess.member())
+	link, inv, err := s.Flow.CreateInvite(r.Context(), sess.member(), r.PostFormValue("nonce"))
 	v := view{Title: "Invites", Session: &sess, CSRF: sess.CSRF}
 	var extra homeData
 	switch {
+	case errors.Is(err, flow.ErrBadNonce):
+		http.Error(w, "Bad request", http.StatusBadRequest)
+		return
+	case errors.Is(err, store.ErrDuplicateCreate):
+		v.Error = alreadyMade
 	case errors.Is(err, store.ErrQuota):
 		v.Error = "You have reached your invite quota. An invite frees up when it is used, expires or is revoked."
 	case err != nil:

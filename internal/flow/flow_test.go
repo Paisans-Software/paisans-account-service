@@ -51,7 +51,7 @@ func bob() flow.Applicant {
 
 func TestApprovalFlow(t *testing.T) {
 	s, f, m := setup(t, true)
-	link, _, err := s.CreateInvite(ctx, alice)
+	link, _, err := s.CreateInvite(ctx, alice, flow.NewNonce())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +73,7 @@ func TestApprovalFlow(t *testing.T) {
 
 func TestNoApprovalCreatesAtOnce(t *testing.T) {
 	s, f, _ := setup(t, false)
-	link, _, _ := s.CreateInvite(ctx, alice)
+	link, _, _ := s.CreateInvite(ctx, alice, flow.NewNonce())
 	now, err := s.Apply(ctx, token(t, link), bob())
 	if err != nil || !now || f.Created != 1 || f.LinksSent != 1 {
 		t.Fatalf("now=%v err=%v created=%d", now, err, f.Created)
@@ -83,7 +83,7 @@ func TestNoApprovalCreatesAtOnce(t *testing.T) {
 func TestApplyRefusals(t *testing.T) {
 	s, f, _ := setup(t, true)
 	f.Users = append(f.Users, idp.User{ID: "x", Username: "Taken", Email: "used@example.org"})
-	link, _, _ := s.CreateInvite(ctx, alice)
+	link, _, _ := s.CreateInvite(ctx, alice, flow.NewNonce())
 	tok := token(t, link)
 	for name, c := range map[string]struct {
 		a    flow.Applicant
@@ -119,7 +119,7 @@ func TestBadTokensAllLookTheSame(t *testing.T) {
 
 func TestRetryDoesNotCreateTwice(t *testing.T) {
 	s, f, _ := setup(t, true)
-	link, _, _ := s.CreateInvite(ctx, alice)
+	link, _, _ := s.CreateInvite(ctx, alice, flow.NewNonce())
 	s.Apply(ctx, token(t, link), bob())
 	p, _ := s.Pending(ctx)
 	f.FailSendLink = errors.New("smtp down")
@@ -142,7 +142,7 @@ func TestRetryDoesNotCreateTwice(t *testing.T) {
 func TestDeclineRecordsHistoryAndNotifies(t *testing.T) {
 	s, f, m := setup(t, true)
 	f.Users = append(f.Users, idp.User{ID: "a", Username: "alice", Email: "alice@x.org"})
-	link, _, _ := s.CreateInvite(ctx, alice)
+	link, _, _ := s.CreateInvite(ctx, alice, flow.NewNonce())
 	s.Apply(ctx, token(t, link), bob())
 	p, _ := s.Pending(ctx)
 	if err := s.Decline(ctx, root, p[0].ID); err != nil {
@@ -157,7 +157,7 @@ func TestDeclineRecordsHistoryAndNotifies(t *testing.T) {
 	if declined != 1 || len(m.To("alice@x.org")) != 1 {
 		t.Fatal("invitee and inviter are told")
 	}
-	link2, _, _ := s.CreateInvite(ctx, alice)
+	link2, _, _ := s.CreateInvite(ctx, alice, flow.NewNonce())
 	a := bob()
 	a.Email = " Bob@Example.org "
 	s.Apply(ctx, token(t, link2), a)
@@ -169,7 +169,7 @@ func TestDeclineRecordsHistoryAndNotifies(t *testing.T) {
 
 func TestApproveRechecksUsername(t *testing.T) {
 	s, f, _ := setup(t, true)
-	link, _, _ := s.CreateInvite(ctx, alice)
+	link, _, _ := s.CreateInvite(ctx, alice, flow.NewNonce())
 	s.Apply(ctx, token(t, link), bob())
 	f.Users = append(f.Users, idp.User{ID: "z", Username: "Bob", Email: "z@x.org"})
 	p, _ := s.Pending(ctx)
@@ -184,7 +184,7 @@ func TestApproveRechecksUsername(t *testing.T) {
 
 func TestNonAdminCannotDecide(t *testing.T) {
 	s, _, _ := setup(t, true)
-	link, _, _ := s.CreateInvite(ctx, alice)
+	link, _, _ := s.CreateInvite(ctx, alice, flow.NewNonce())
 	s.Apply(ctx, token(t, link), bob())
 	p, _ := s.Pending(ctx)
 	if err := s.Approve(ctx, alice, p[0].ID); err == nil {
@@ -195,7 +195,7 @@ func TestNonAdminCannotDecide(t *testing.T) {
 func TestApprovalOffProviderFailureLeavesApplicationPending(t *testing.T) {
 	s, f, m := setup(t, false)
 	f.FailCreate = errors.New("pocket id down")
-	link, _, _ := s.CreateInvite(ctx, alice)
+	link, _, _ := s.CreateInvite(ctx, alice, flow.NewNonce())
 	now, err := s.Apply(ctx, token(t, link), bob())
 	if now || err != nil {
 		t.Fatalf("now=%v err=%v", now, err)
@@ -215,7 +215,7 @@ func TestApprovalOffProviderFailureLeavesApplicationPending(t *testing.T) {
 
 func TestApproveAdoptsAccountItAlreadyCreated(t *testing.T) {
 	s, f, _ := setup(t, true)
-	link, _, _ := s.CreateInvite(ctx, alice)
+	link, _, _ := s.CreateInvite(ctx, alice, flow.NewNonce())
 	s.Apply(ctx, token(t, link), bob())
 	// The account exists with the applicant's email, as after a crash between
 	// creating it and recording it.
@@ -232,7 +232,7 @@ func TestApproveAdoptsAccountItAlreadyCreated(t *testing.T) {
 func TestProviderDownAtApplyStoresApplication(t *testing.T) {
 	s, f, _ := setup(t, true)
 	f.FailLookup = errors.New("pocket id down")
-	link, _, _ := s.CreateInvite(ctx, alice)
+	link, _, _ := s.CreateInvite(ctx, alice, flow.NewNonce())
 	if _, err := s.Apply(ctx, token(t, link), bob()); err != nil {
 		t.Fatal(err)
 	}
@@ -256,7 +256,7 @@ func TestWaitingNoticeGoesToAdminGroupOnly(t *testing.T) {
 	s, f, m := setup(t, true)
 	f.Users = append(f.Users, idp.User{ID: "a", Username: "alice", Email: "alice@x.org"})
 	f.Groups["members"] = []string{"alice"}
-	link, _, _ := s.CreateInvite(ctx, alice)
+	link, _, _ := s.CreateInvite(ctx, alice, flow.NewNonce())
 	if _, err := s.Apply(ctx, token(t, link), bob()); err != nil {
 		t.Fatal(err)
 	}
@@ -267,7 +267,7 @@ func TestWaitingNoticeGoesToAdminGroupOnly(t *testing.T) {
 
 func TestApprovalInProgressRefusesOthers(t *testing.T) {
 	s, f, _ := setup(t, true)
-	link, _, _ := s.CreateInvite(ctx, alice)
+	link, _, _ := s.CreateInvite(ctx, alice, flow.NewNonce())
 	s.Apply(ctx, token(t, link), bob())
 	p, _ := s.Pending(ctx)
 	var second, decline error
@@ -295,7 +295,7 @@ func TestApprovalInProgressRefusesOthers(t *testing.T) {
 
 func TestFailedCreateReleasesClaim(t *testing.T) {
 	s, f, _ := setup(t, true)
-	link, _, _ := s.CreateInvite(ctx, alice)
+	link, _, _ := s.CreateInvite(ctx, alice, flow.NewNonce())
 	s.Apply(ctx, token(t, link), bob())
 	p, _ := s.Pending(ctx)
 	f.FailCreate = errors.New("pocket id down")
@@ -313,7 +313,7 @@ func TestFailedCreateReleasesClaim(t *testing.T) {
 
 func TestAccountCreationAuditNamesTheAccount(t *testing.T) {
 	s, _, _, st := setupStore(t, true)
-	link, _, _ := s.CreateInvite(ctx, alice)
+	link, _, _ := s.CreateInvite(ctx, alice, flow.NewNonce())
 	s.Apply(ctx, token(t, link), bob())
 	p, _ := s.Pending(ctx)
 	if err := s.Approve(ctx, root, p[0].ID); err != nil {
@@ -323,5 +323,24 @@ func TestAccountCreationAuditNamesTheAccount(t *testing.T) {
 	want := fmt.Sprintf("%d idp=id-1", p[0].ID)
 	if err != nil || len(got) != 1 || got[0] != want {
 		t.Fatalf("want [%s], got %v %v", want, got, err)
+	}
+}
+
+func TestCreateInviteNonce(t *testing.T) {
+	s, _, _ := setup(t, true)
+	for _, n := range []string{"", "short", "!!!!!!!!!!!!!!!!!!!!!!", "AAAAAAAAAAAAAAAAAAAAAA=="} {
+		if _, _, err := s.CreateInvite(ctx, alice, n); !errors.Is(err, flow.ErrBadNonce) {
+			t.Errorf("%q: %v", n, err)
+		}
+	}
+	n := flow.NewNonce()
+	if _, _, err := s.CreateInvite(ctx, alice, n); err != nil {
+		t.Fatal(err)
+	}
+	if link, _, err := s.CreateInvite(ctx, alice, n); !errors.Is(err, store.ErrDuplicateCreate) || link != "" {
+		t.Fatalf("same nonce: %q %v", link, err)
+	}
+	if inv, _ := s.Invites(ctx, alice); len(inv) != 1 {
+		t.Fatalf("want one invite, got %d", len(inv))
 	}
 }

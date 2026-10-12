@@ -5,7 +5,11 @@ CREATE TABLE invites (
   inviter_username text NOT NULL,
   created_at       timestamptz NOT NULL DEFAULT now(),
   expires_at       timestamptz NOT NULL,
-  state            text NOT NULL CHECK (state IN ('open','applied','used','expired','revoked','declined'))
+  state            text NOT NULL CHECK (state IN ('open','applied','used','expired','revoked','declined')),
+  -- create_nonce is the one-time value the create form carried, so that a
+  -- resubmitted form makes no second invite.
+  create_nonce     text,
+  CONSTRAINT invites_create_nonce UNIQUE (inviter_sub, create_nonce)
 );
 CREATE INDEX invites_inviter_live ON invites (inviter_sub) WHERE state IN ('open','applied');
 

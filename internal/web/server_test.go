@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -75,6 +76,12 @@ func (h harness) as(sess Session, method, path string, form url.Values) *httptes
 	return out
 }
 
+// createForm is the create form as the home page renders it: the session's
+// CSRF token and a fresh one-time nonce.
+func createForm() url.Values {
+	return url.Values{"csrf": {"tok"}, "nonce": {flow.NewNonce()}}
+}
+
 var member = Session{Sub: "s-alice", Username: "alice", CSRF: "tok", Exp: time.Now().Add(time.Hour).Unix()}
 var admin = Session{Sub: "s-root", Username: "root", Admin: true, CSRF: "tok", Exp: time.Now().Add(time.Hour).Unix()}
 
@@ -89,15 +96,15 @@ func TestAnonymousRedirectsToLogin(t *testing.T) {
 
 func TestCreateInviteShowsLinkOnceAndEnforcesQuota(t *testing.T) {
 	h := newHarness(t, true)
-	rec := h.as(member, "POST", "/invites", url.Values{"csrf": {"tok"}})
+	rec := h.as(member, "POST", "/invites", createForm())
 	if rec.Code != 200 || !strings.Contains(rec.Body.String(), "https://invite.example.org/i/") {
 		t.Fatalf("%d %s", rec.Code, rec.Body.String())
 	}
-	rec = h.as(member, "POST", "/invites", url.Values{"csrf": {"tok"}})
+	rec = h.as(member, "POST", "/invites", createForm())
 	if !strings.Contains(rec.Body.String(), "quota") {
 		t.Fatal("second invite past a quota of 1 must be refused with a message")
 	}
-	if rec = h.as(admin, "POST", "/invites", url.Values{"csrf": {"tok"}}); !strings.Contains(rec.Body.String(), "/i/") {
+	if rec = h.as(admin, "POST", "/invites", createForm()); !strings.Contains(rec.Body.String(), "/i/") {
 		t.Fatal("admins have no quota")
 	}
 }
@@ -147,7 +154,7 @@ func TestHealthz(t *testing.T) {
 
 func applyBob(t *testing.T, h harness) {
 	t.Helper()
-	link, _, err := h.flow.CreateInvite(context.Background(), flow.Member{Sub: "s-alice", Username: "alice"})
+	link, _, err := h.flow.CreateInvite(context.Background(), flow.Member{Sub: "s-alice", Username: "alice"}, flow.NewNonce())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -217,7 +224,7 @@ func TestAdminDeclines(t *testing.T) {
 
 func TestMemberRevokes(t *testing.T) {
 	h := newHarness(t, true)
-	h.as(member, "POST", "/invites", url.Values{"csrf": {"tok"}})
+	h.as(member, "POST", "/invites", createForm())
 	inv, _ := h.flow.Invites(context.Background(), flow.Member{Sub: "s-alice"})
 	rec := h.as(member, "POST", "/invites/"+itoa(inv[0].ID)+"/revoke", url.Values{"csrf": {"tok"}})
 	if rec.Code != 303 {
@@ -230,7 +237,7 @@ func TestMemberRevokes(t *testing.T) {
 
 func TestNewLinkNeverLeavesTheResponseBody(t *testing.T) {
 	h := newHarness(t, true)
-	rec := h.as(member, "POST", "/invites", url.Values{"csrf": {"tok"}})
+	rec := h.as(member, "POST", "/invites", createForm())
 	body := rec.Body.String()
 	i := strings.Index(body, "https://invite.example.org/i/")
 	if i < 0 {
@@ -268,5 +275,72 @@ func TestRevokeBadIDIs400(t *testing.T) {
 		if rec.Code != 400 || !strings.Contains(rec.Body.String(), "Bad request") {
 			t.Errorf("%s: %d %s", id, rec.Code, rec.Body.String())
 		}
+	}
+}
+
+// A resubmitted create form, as after a refresh, makes no second invite and
+// says where the first one is.
+func TestCreateFormResubmittedMakesOneInvite(t *testing.T) {
+	h := newHarness(t, true)
+	f := createForm()
+	first := h.as(admin, "POST", "/invites", f)
+	if first.Code != 200 || !strings.Contains(first.Body.String(), "https://invite.example.org/i/") {
+		t.Fatalf("%d %s", first.Code, first.Body.String())
+	}
+	again := h.as(admin, "POST", "/invites", f)
+	body := again.Body.String()
+	if again.Code != 200 || strings.Contains(body, "/i/") ||
+		!strings.Contains(body, "That invite was already made. It&#39;s in your list below. If you didn&#39;t copy the link, revoke it and make a new one.") {
+		t.Fatalf("%d %s", again.Code, body)
+	}
+	if inv, _ := h.flow.Invites(context.Background(), flow.Member{Sub: admin.Sub}); len(inv) != 1 {
+		t.Fatalf("want one invite, got %d", len(inv))
+	}
+	h.as(admin, "POST", "/invites", createForm())
+	if inv, _ := h.flow.Invites(context.Background(), flow.Member{Sub: admin.Sub}); len(inv) != 2 {
+		t.Fatalf("a new form makes a new invite: %d", len(inv))
+	}
+}
+
+// A member at quota who resubmits is told the invite exists, not that the
+// quota is full.
+func TestCreateFormResubmittedAtQuota(t *testing.T) {
+	h := newHarness(t, true)
+	f := createForm()
+	h.as(member, "POST", "/invites", f)
+	body := h.as(member, "POST", "/invites", f).Body.String()
+	if !strings.Contains(body, "That invite was already made.") || strings.Contains(body, "reached your invite quota") {
+		t.Fatal(body)
+	}
+}
+
+func TestCreateFormNeedsNonce(t *testing.T) {
+	h := newHarness(t, true)
+	for name, n := range map[string][]string{
+		"missing": nil, "empty": {""}, "not base64": {"!!!!!!!!!!!!!!!!!!!!!!"},
+		"short": {"AAAAAAAAAAAAAAAAAAAA"}, "padded": {"AAAAAAAAAAAAAAAAAAAAAA=="},
+	} {
+		f := url.Values{"csrf": {"tok"}}
+		if n != nil {
+			f["nonce"] = n
+		}
+		if rec := h.as(member, "POST", "/invites", f); rec.Code != 400 {
+			t.Errorf("%s: %d", name, rec.Code)
+		}
+	}
+	if inv, _ := h.flow.Invites(context.Background(), flow.Member{Sub: member.Sub}); len(inv) != 0 {
+		t.Fatal("nothing may be made")
+	}
+}
+
+// Every render of the home page carries a new nonce, so the next press makes
+// the next invite.
+func TestHomeRendersFreshNonce(t *testing.T) {
+	h := newHarness(t, true)
+	re := regexp.MustCompile(`name="nonce" value="([A-Za-z0-9_-]{22})"`)
+	a := re.FindStringSubmatch(h.as(member, "GET", "/", nil).Body.String())
+	b := re.FindStringSubmatch(h.as(member, "GET", "/", nil).Body.String())
+	if a == nil || b == nil || a[1] == b[1] {
+		t.Fatalf("nonces %v %v", a, b)
 	}
 }

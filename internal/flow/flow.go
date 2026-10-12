@@ -30,6 +30,8 @@ var (
 	ErrEmailTaken      = errors.New("an account already uses that email address")
 	ErrNotAgreed       = errors.New("you need to agree to the code of conduct")
 	ErrForbidden       = errors.New("forbidden")
+	// ErrBadNonce is a create form without a well-formed one-time nonce.
+	ErrBadNonce = errors.New("the form is missing its one-time value")
 )
 
 type Member struct {
@@ -93,7 +95,25 @@ func TokenHash(token string) ([]byte, bool) {
 	return h[:], true
 }
 
-func (s *Service) CreateInvite(ctx context.Context, m Member) (string, store.Invite, error) {
+// NewNonce returns a fresh one-time value for an invite create form: 16
+// random bytes as unpadded base64url.
+func NewNonce() string {
+	b := make([]byte, 16)
+	rand.Read(b)
+	return base64.RawURLEncoding.EncodeToString(b)
+}
+
+func validNonce(n string) bool {
+	b, err := base64.RawURLEncoding.DecodeString(n)
+	return err == nil && len(b) == 16
+}
+
+// CreateInvite makes an invite for the form that carried nonce. The same nonce
+// a second time makes nothing and returns store.ErrDuplicateCreate.
+func (s *Service) CreateInvite(ctx context.Context, m Member, nonce string) (string, store.Invite, error) {
+	if !validNonce(nonce) {
+		return "", store.Invite{}, ErrBadNonce
+	}
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {
 		return "", store.Invite{}, err
@@ -104,7 +124,7 @@ func (s *Service) CreateInvite(ctx context.Context, m Member) (string, store.Inv
 	if m.Admin {
 		quota = 0
 	}
-	inv, err := s.st.CreateInvite(ctx, h, m.Sub, m.Username, s.now().Add(s.s.InviteLifetime), quota)
+	inv, err := s.st.CreateInvite(ctx, h, m.Sub, m.Username, nonce, s.now().Add(s.s.InviteLifetime), quota)
 	if err != nil {
 		return "", store.Invite{}, err
 	}

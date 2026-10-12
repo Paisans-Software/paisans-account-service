@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 var (
@@ -14,6 +15,9 @@ var (
 	ErrNotUsable     = errors.New("invite cannot be used")
 	ErrUsernameTaken = errors.New("username taken")
 	ErrNotFound      = errors.New("not found")
+	// ErrDuplicateCreate is a create form submitted again: its nonce has
+	// already made an invite, so nothing more is made.
+	ErrDuplicateCreate = errors.New("invite already made from this form")
 	// ErrBusy is an application another admin (or the automatic approval) has
 	// claimed and is still deciding.
 	ErrBusy = errors.New("application is being decided")
@@ -32,13 +36,23 @@ func audit(ctx context.Context, tx pgx.Tx, actor, action string, id int64) error
 	return err
 }
 
-func (s *Store) CreateInvite(ctx context.Context, tokenHash []byte, inviterSub, inviterUsername string, expires time.Time, quota int) (Invite, error) {
+// CreateInvite makes an invite for the form that carried nonce. A nonce the
+// member has already used makes nothing and returns ErrDuplicateCreate, before
+// the quota is counted, so a resubmitted form is never reported as over quota.
+func (s *Store) CreateInvite(ctx context.Context, tokenHash []byte, inviterSub, inviterUsername, nonce string, expires time.Time, quota int) (Invite, error) {
 	var inv Invite
 	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
 		// Serialises one member's creates across every site, so the count
 		// and the insert cannot interleave.
 		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('invite-quota:' || $1, 0))`, inviterSub); err != nil {
 			return err
+		}
+		var used bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM invites WHERE inviter_sub=$1 AND create_nonce=$2)`, inviterSub, nonce).Scan(&used); err != nil {
+			return err
+		}
+		if used {
+			return ErrDuplicateCreate
 		}
 		if quota > 0 {
 			var live int
@@ -49,10 +63,15 @@ func (s *Store) CreateInvite(ctx context.Context, tokenHash []byte, inviterSub, 
 				return ErrQuota
 			}
 		}
-		if err := tx.QueryRow(ctx, `INSERT INTO invites (token_hash, inviter_sub, inviter_username, expires_at, state)
-			VALUES ($1,$2,$3,$4,'open') RETURNING id, inviter_sub, inviter_username, created_at, expires_at, state`,
-			tokenHash, inviterSub, inviterUsername, expires).
-			Scan(&inv.ID, &inv.InviterSub, &inv.InviterUsername, &inv.CreatedAt, &inv.ExpiresAt, &inv.State); err != nil {
+		err := tx.QueryRow(ctx, `INSERT INTO invites (token_hash, inviter_sub, inviter_username, expires_at, state, create_nonce)
+			VALUES ($1,$2,$3,$4,'open',$5) RETURNING id, inviter_sub, inviter_username, created_at, expires_at, state`,
+			tokenHash, inviterSub, inviterUsername, expires, nonce).
+			Scan(&inv.ID, &inv.InviterSub, &inv.InviterUsername, &inv.CreatedAt, &inv.ExpiresAt, &inv.State)
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == "invites_create_nonce" {
+			return ErrDuplicateCreate
+		}
+		if err != nil {
 			return err
 		}
 		return audit(ctx, tx, inviterSub, "invite.create", inv.ID)

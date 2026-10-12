@@ -3,7 +3,7 @@
   <h1>Invite someone</h1>
   <p class="muted">{{.Data.Remaining}}</p>
   {{with .Data.NewLink}}<p>Send this link to the person you are inviting. It works once{{with $.Data.Expires}}, until {{.}}{{end}}.</p><p class="link">{{.}}</p>{{end}}
-  <form method="post" action="/invites"><input type="hidden" name="csrf" value="{{.CSRF}}"><button>Make an invite link</button></form>
+  <form method="post" action="/invites"><input type="hidden" name="csrf" value="{{.CSRF}}"><input type="hidden" name="nonce" value="{{.Data.Nonce}}"><button>Make an invite link</button></form>
 </div>
 <div class="card">
   <h2>Your invites</h2>

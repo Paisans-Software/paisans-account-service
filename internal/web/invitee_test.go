@@ -15,7 +15,7 @@ func (h harness) invite(t *testing.T) (string, string) {
 }
 
 func (h harness) inviteAs(t *testing.T, m flow.Member) (string, string) {
-	link, _, err := h.flow.CreateInvite(context.Background(), m)
+	link, _, err := h.flow.CreateInvite(context.Background(), m, flow.NewNonce())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +129,7 @@ func TestDatabaseOutageIs503Everywhere(t *testing.T) {
 	h.st.Close()
 	for name, rec := range map[string]*httptest.ResponseRecorder{
 		"home":   h.as(member, "GET", "/", nil),
-		"create": h.as(member, "POST", "/invites", url.Values{"csrf": {"tok"}}),
+		"create": h.as(member, "POST", "/invites", createForm()),
 		"admin":  h.as(admin, "GET", "/admin", nil),
 		"submit": post(h, "/i/"+tok, form(csrf)),
 	} {
@@ -155,7 +155,7 @@ func TestRefusedApplicationLeavesInviteUsable(t *testing.T) {
 func TestRevokedLooksLikeMalformed(t *testing.T) {
 	h := newHarness(t, true)
 	alice := flow.Member{Sub: "s-alice", Username: "alice"}
-	link, inv, err := h.flow.CreateInvite(context.Background(), alice)
+	link, inv, err := h.flow.CreateInvite(context.Background(), alice, flow.NewNonce())
 	if err != nil {
 		t.Fatal(err)
 	}

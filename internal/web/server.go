@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/paisans-software/paisans-invite/internal/config"
 	"github.com/paisans-software/paisans-invite/internal/flow"
@@ -31,7 +32,7 @@ type server struct {
 func itoa(n int64) string { return strconv.FormatInt(n, 10) }
 
 func New(ctx context.Context, cfg config.Config, f *flow.Service, health pinger) (http.Handler, error) {
-	s := sessions{key: cfg.SessionKey, secure: len(cfg.PublicURL) > 8 && cfg.PublicURL[:8] == "https://"}
+	s := sessions{key: cfg.SessionKey, secure: strings.HasPrefix(cfg.PublicURL, "https://")}
 	a, err := newAuthenticator(ctx, cfg, s)
 	if err != nil {
 		return nil, err
@@ -68,6 +69,7 @@ func NewServer(o Options) http.Handler {
 func securityHeaders(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("Cache-Control", "no-store")
 		h.ServeHTTP(w, r)

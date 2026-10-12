@@ -30,10 +30,14 @@ type loginState struct {
 	Exp  int64
 }
 
-// localPath returns p if it is a path on this site, and "/" otherwise. A
-// leading "//" or "/\" would be read by a browser as another host.
+// maxNext bounds the return path, which rides in a signed cookie.
+const maxNext = 512
+
+// localPath returns p if it is a path on this site no longer than maxNext
+// bytes, and "/" otherwise. A leading "//" or "/\" would be read by a browser
+// as another host.
 func localPath(p string) string {
-	if !strings.HasPrefix(p, "/") || strings.HasPrefix(p, "//") || strings.ContainsAny(p, "\\") {
+	if len(p) > maxNext || !strings.HasPrefix(p, "/") || strings.HasPrefix(p, "//") || strings.ContainsAny(p, "\\") {
 		return "/"
 	}
 	for _, c := range p {

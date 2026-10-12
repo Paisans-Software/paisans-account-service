@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 )
@@ -73,14 +74,16 @@ func TestLoginKeepsOnlyLocalNext(t *testing.T) {
 	key := make([]byte, 32)
 	a := &authenticator{s: sessions{key: key}}
 	for next, want := range map[string]string{
-		"/admin":               "/admin",
-		"/admin?error=busy":    "/admin?error=busy",
-		"":                     "/",
-		"//evil.example":       "/",
-		"/\\evil.example":      "/",
-		"https://evil.example": "/",
-		"admin":                "/",
-		"/a\nb":                "/",
+		"/admin":                             "/admin",
+		"/admin?error=busy":                  "/admin?error=busy",
+		"":                                   "/",
+		"//evil.example":                     "/",
+		"/\\evil.example":                    "/",
+		"https://evil.example":               "/",
+		"admin":                              "/",
+		"/a\nb":                              "/",
+		"/" + strings.Repeat("a", maxNext-1): "/" + strings.Repeat("a", maxNext-1),
+		"/" + strings.Repeat("a", maxNext):   "/",
 	} {
 		rec := httptest.NewRecorder()
 		a.login(rec, httptest.NewRequest("GET", "/auth/login?next="+url.QueryEscape(next), nil))
@@ -99,7 +102,7 @@ func TestLoginKeepsOnlyLocalNext(t *testing.T) {
 
 func TestAdmitReturnsToNext(t *testing.T) {
 	a := &authenticator{memberGrp: "members", adminGrp: "admins", s: sessions{key: make([]byte, 32)}}
-	for next, want := range map[string]string{"/admin": "/admin", "//evil.example": "/", "": "/"} {
+	for next, want := range map[string]string{"/admin": "/admin", "//evil.example": "/", "": "/", "/" + strings.Repeat("a", maxNext): "/"} {
 		rec := httptest.NewRecorder()
 		a.admit(rec, httptest.NewRequest("GET", "/auth/callback", nil), "sub", "root", []string{"admins"}, next)
 		if rec.Code != 302 || rec.Header().Get("Location") != want {

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -22,17 +23,20 @@ type sessions struct {
 	secure bool
 }
 
-func sign(key []byte, v any) (string, error) {
+// sign binds purpose into the MAC so a value minted for one cookie cannot be
+// replayed as another.
+func sign(key []byte, purpose string, v any) (string, error) {
 	b, err := json.Marshal(v)
 	if err != nil {
 		return "", err
 	}
 	m := hmac.New(sha256.New, key)
+	m.Write([]byte(purpose + "\x00"))
 	m.Write(b)
 	return base64.RawURLEncoding.EncodeToString(b) + "." + base64.RawURLEncoding.EncodeToString(m.Sum(nil)), nil
 }
 
-func verify(key []byte, s string, v any) bool {
+func verify(key []byte, purpose, s string, v any) bool {
 	payload, mac, ok := strings.Cut(s, ".")
 	if !ok {
 		return false
@@ -43,6 +47,7 @@ func verify(key []byte, s string, v any) bool {
 		return false
 	}
 	m := hmac.New(sha256.New, key)
+	m.Write([]byte(purpose + "\x00"))
 	m.Write(b)
 	if !hmac.Equal(got, m.Sum(nil)) {
 		return false
@@ -55,8 +60,9 @@ func (s sessions) cookie(name, value string, maxAge int) *http.Cookie {
 }
 
 func (s sessions) write(w http.ResponseWriter, sess Session) {
-	v, err := sign(s.key, sess)
+	v, err := sign(s.key, "session", sess)
 	if err != nil {
+		slog.Error("session sign failed", "err", err)
 		return
 	}
 	http.SetCookie(w, s.cookie("invite_session", v, int(time.Until(time.Unix(sess.Exp, 0)).Seconds())))
@@ -68,7 +74,7 @@ func (s sessions) read(r *http.Request) (Session, bool) {
 		return Session{}, false
 	}
 	var sess Session
-	if !verify(s.key, c.Value, &sess) || time.Now().Unix() >= sess.Exp {
+	if !verify(s.key, "session", c.Value, &sess) || sess.Sub == "" || sess.CSRF == "" || time.Now().Unix() >= sess.Exp {
 		return Session{}, false
 	}
 	return sess, true

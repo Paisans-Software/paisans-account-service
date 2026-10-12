@@ -12,9 +12,11 @@ import (
 
 func clientIP(r *http.Request, trustForwarded bool) string {
 	if trustForwarded {
-		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-			parts := strings.Split(xff, ",")
-			return strings.TrimSpace(parts[len(parts)-1])
+		if lines := r.Header.Values("X-Forwarded-For"); len(lines) > 0 {
+			parts := strings.Split(lines[len(lines)-1], ",")
+			if ip := strings.TrimSpace(parts[len(parts)-1]); ip != "" {
+				return ip
+			}
 		}
 	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)

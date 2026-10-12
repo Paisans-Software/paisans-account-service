@@ -39,3 +39,17 @@ func TestInviteeCSRFDiffersPerInvite(t *testing.T) {
 		t.Fatal("token must be bound to the invite")
 	}
 }
+
+func TestClientIPUsesLastHeaderLineAndFallsBack(t *testing.T) {
+	r := httptest.NewRequest("GET", "/", nil)
+	r.RemoteAddr = "10.0.0.2:5555"
+	r.Header.Add("X-Forwarded-For", "6.6.6.6")
+	r.Header.Add("X-Forwarded-For", "1.1.1.1, 203.0.113.9")
+	if got := clientIP(r, true); got != "203.0.113.9" {
+		t.Fatalf("got %s", got)
+	}
+	r.Header.Set("X-Forwarded-For", "6.6.6.6,")
+	if got := clientIP(r, true); got != "10.0.0.2" {
+		t.Fatalf("empty entry: got %s", got)
+	}
+}

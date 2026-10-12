@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"log/slog"
 	"net/http"
 	"slices"
 	"time"
@@ -50,7 +51,12 @@ func newAuthenticator(ctx context.Context, cfg config.Config, s sessions) (*auth
 
 func (a *authenticator) login(w http.ResponseWriter, r *http.Request) {
 	st := loginState{State: randomString(), Nonce: randomString(), Verifier: oauth2.GenerateVerifier(), Exp: time.Now().Add(10 * time.Minute).Unix()}
-	v, _ := sign(a.s.key, st)
+	v, err := sign(a.s.key, "login", st)
+	if err != nil {
+		slog.Error("login state sign failed", "err", err)
+		http.Error(w, "Sign-in failed.", http.StatusInternalServerError)
+		return
+	}
 	http.SetCookie(w, a.s.cookie("invite_login", v, 600))
 	http.Redirect(w, r, a.oauth.AuthCodeURL(st.State, oidc.Nonce(st.Nonce), oauth2.S256ChallengeOption(st.Verifier)), http.StatusFound)
 }
@@ -58,7 +64,7 @@ func (a *authenticator) login(w http.ResponseWriter, r *http.Request) {
 func (a *authenticator) callback(w http.ResponseWriter, r *http.Request) {
 	c, err := r.Cookie("invite_login")
 	var st loginState
-	if err != nil || !verify(a.s.key, c.Value, &st) || time.Now().Unix() > st.Exp || r.URL.Query().Get("state") != st.State {
+	if err != nil || !verify(a.s.key, "login", c.Value, &st) || time.Now().Unix() > st.Exp || r.URL.Query().Get("state") != st.State {
 		http.Error(w, "Sign-in expired. Please try again.", http.StatusBadRequest)
 		return
 	}

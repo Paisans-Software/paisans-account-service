@@ -43,3 +43,28 @@ func TestSessionTamperAndExpiry(t *testing.T) {
 		t.Fatal("expired session accepted")
 	}
 }
+
+func TestSessionRejectsLoginStateAndEmptyFields(t *testing.T) {
+	key := make([]byte, 32)
+	s := sessions{key: key}
+	v, _ := sign(key, "login", loginState{State: "a", Exp: time.Now().Add(time.Hour).Unix()})
+	req := httptest.NewRequest("GET", "/", nil)
+	req.AddCookie(&http.Cookie{Name: "invite_session", Value: v})
+	if _, ok := s.read(req); ok {
+		t.Fatal("login-state cookie accepted as session")
+	}
+	for name, sess := range map[string]Session{
+		"no sub":  {CSRF: "c", Exp: time.Now().Add(time.Hour).Unix()},
+		"no csrf": {Sub: "x", Exp: time.Now().Add(time.Hour).Unix()},
+	} {
+		rec := httptest.NewRecorder()
+		s.write(rec, sess)
+		req := httptest.NewRequest("GET", "/", nil)
+		for _, c := range rec.Result().Cookies() {
+			req.AddCookie(c)
+		}
+		if _, ok := s.read(req); ok {
+			t.Fatal(name)
+		}
+	}
+}

@@ -24,6 +24,9 @@ type Client struct {
 
 var _ idp.Provider = (*Client)(nil)
 
+// maxPages bounds a listing so a misbehaving server cannot hold a request open.
+const maxPages = 100
+
 // New copies hc so that a redirect is an error: the API key header must never
 // follow a 3xx to another place.
 func New(baseURL, apiKey string, hc *http.Client) *Client {
@@ -109,6 +112,9 @@ func pathOnly(p string) string { return strings.SplitN(p, "?", 2)[0] }
 func (c *Client) listUsers(ctx context.Context) ([]idp.User, error) {
 	var users []idp.User
 	for page := 1; ; page++ {
+		if page > maxPages {
+			return nil, fmt.Errorf("identity provider GET /api/users: more than %d pages", maxPages)
+		}
 		q := url.Values{"pagination[page]": {fmt.Sprint(page)}, "pagination[limit]": {"100"}}
 		var res struct {
 			Data       []userDTO `json:"data"`

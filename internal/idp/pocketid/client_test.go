@@ -208,3 +208,14 @@ func TestRedirectIsAnError(t *testing.T) {
 		t.Fatal("the redirect target was requested")
 	}
 }
+
+func TestListingIsCapped(t *testing.T) {
+	pages := make([][]map[string]any, maxPages+1)
+	c, calls := fakePaged(t, pages...)
+	if _, err := c.AdminEmails(context.Background()); err == nil {
+		t.Fatal("a listing past the page cap must be an error")
+	}
+	if len(*calls) != maxPages {
+		t.Fatalf("want %d requests, got %d", maxPages, len(*calls))
+	}
+}

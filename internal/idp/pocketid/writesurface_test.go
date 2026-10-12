@@ -56,10 +56,12 @@ func TestWriteSurface(t *testing.T) {
 						}
 					}
 					switch x.Sel.Name {
+					case "NewRequest", "NewRequestWithContext", "Do", "RoundTrip", "Get":
+						if owner != "do" {
+							t.Errorf("%s: %s outside do; only do may build or send a request", fset.Position(x.Pos()), x.Sel.Name)
+						}
 					case "Post", "PostForm", "Head":
 						t.Errorf("%s: %s is a request shortcut; the write surface goes through do", fset.Position(x.Pos()), x.Sel.Name)
-					case "Method":
-						// Reading a Method field is harmless; assignment is caught below.
 					}
 				case *ast.BasicLit:
 					if x.Kind == token.STRING {
@@ -85,6 +87,7 @@ func TestWriteSurface(t *testing.T) {
 			})
 		}
 	}
+	structure(t, fset, parsed)
 	want := map[string]int{"CreateUser:MethodPost": 1, "SendLoginLink:MethodPost": 1}
 	if !reflect.DeepEqual(writes, want) {
 		t.Fatalf("write surface changed: got %v, want %v", writes, want)
@@ -102,14 +105,14 @@ func TestWriteSurface(t *testing.T) {
 				if got := stringLits(call.Args[2]); !reflect.DeepEqual(got, []string{"/api/users"}) {
 					t.Fatalf("CreateUser path changed: %q", got)
 				}
+				checkCreateLiteral(t, fn)
 				if !bodyIsCreateUserRequest(call.Args[3], fn) {
 					t.Fatal("CreateUser body must be a createUserRequest literal")
 				}
 			case "SendLoginLink":
 				call := onlyDoCall(t, fn)
-				got := stringLits(call.Args[2])
-				if len(got) < 2 || got[0] != "/api/users/" || got[len(got)-1] != "/one-time-access-email" {
-					t.Fatalf("SendLoginLink path changed: %q", got)
+				if !isLoginPath(call.Args[2], paramName(fn, 1)) {
+					t.Fatal(`SendLoginLink path must be "/api/users/" + url.PathEscape(userID) + "/one-time-access-email"`)
 				}
 				lit, ok := call.Args[3].(*ast.CompositeLit)
 				if st, isStruct := func() (*ast.StructType, bool) {
@@ -202,4 +205,189 @@ func bodyIsCreateUserRequest(arg ast.Expr, fn *ast.FuncDecl) bool {
 		return true
 	})
 	return found && clean
+}
+
+func paramName(fn *ast.FuncDecl, i int) string {
+	var names []string
+	for _, f := range fn.Type.Params.List {
+		for _, n := range f.Names {
+			names = append(names, n.Name)
+		}
+	}
+	if i < len(names) {
+		return names[i]
+	}
+	return ""
+}
+
+func isStr(e ast.Expr, want string) bool {
+	l, ok := e.(*ast.BasicLit)
+	if !ok || l.Kind != token.STRING {
+		return false
+	}
+	s, err := strconv.Unquote(l.Value)
+	return err == nil && s == want
+}
+
+func isLoginPath(e ast.Expr, userID string) bool {
+	outer, ok := e.(*ast.BinaryExpr)
+	if !ok || outer.Op != token.ADD || !isStr(outer.Y, "/one-time-access-email") {
+		return false
+	}
+	inner, ok := outer.X.(*ast.BinaryExpr)
+	if !ok || inner.Op != token.ADD || !isStr(inner.X, "/api/users/") {
+		return false
+	}
+	call, ok := inner.Y.(*ast.CallExpr)
+	if !ok || len(call.Args) != 1 {
+		return false
+	}
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok || sel.Sel.Name != "PathEscape" {
+		return false
+	}
+	if x, ok := sel.X.(*ast.Ident); !ok || x.Name != "url" {
+		return false
+	}
+	arg, ok := call.Args[0].(*ast.Ident)
+	return ok && userID != "" && arg.Name == userID
+}
+
+// fieldOf reports whether e is param.field, or strings.TrimSpace(param.field).
+func fieldOf(e ast.Expr, param, field string, trim bool) bool {
+	if c, ok := e.(*ast.CallExpr); ok && trim && len(c.Args) == 1 {
+		if sel, ok := c.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "TrimSpace" {
+			if x, ok := sel.X.(*ast.Ident); ok && x.Name == "strings" {
+				return fieldOf(c.Args[0], param, field, false)
+			}
+		}
+		return false
+	}
+	sel, ok := e.(*ast.SelectorExpr)
+	if !ok || sel.Sel.Name != field {
+		return false
+	}
+	x, ok := sel.X.(*ast.Ident)
+	return ok && x.Name == param
+}
+
+// checkCreateLiteral requires every createUserRequest literal in CreateUser to
+// be keyed, to set EmailVerified to the literal false (or omit it), and to take
+// every other field only from the NewUser argument.
+func checkCreateLiteral(t *testing.T, fn *ast.FuncDecl) {
+	t.Helper()
+	param := paramName(fn, 1)
+	n := 0
+	ast.Inspect(fn, func(x ast.Node) bool {
+		lit, ok := x.(*ast.CompositeLit)
+		if !ok || !isCreateUserRequestLit(lit) {
+			return true
+		}
+		n++
+		for _, el := range lit.Elts {
+			kv, ok := el.(*ast.KeyValueExpr)
+			if !ok {
+				t.Fatal("createUserRequest literal must use keyed fields")
+			}
+			key := kv.Key.(*ast.Ident).Name
+			good := false
+			switch key {
+			case "Username":
+				good = fieldOf(kv.Value, param, "Username", true)
+			case "Email":
+				good = fieldOf(kv.Value, param, "Email", true)
+			case "DisplayName":
+				good = fieldOf(kv.Value, param, "DisplayName", true)
+			case "EmailVerified":
+				id, ok := kv.Value.(*ast.Ident)
+				good = ok && id.Name == "false"
+			}
+			if !good {
+				t.Fatalf("createUserRequest.%s is set from something other than the approved source", key)
+			}
+		}
+		return true
+	})
+	if n != 1 {
+		t.Fatalf("CreateUser must build exactly one createUserRequest, found %d", n)
+	}
+}
+
+// structure is the allowlist half of the test: who may build and send
+// requests, how do is called, and which methods the client exposes.
+func structure(t *testing.T, fset *token.FileSet, files []*ast.File) {
+	t.Helper()
+	exported := map[string]bool{"UsernameTaken": true, "EmailTaken": true, "FindUser": true, "AdminEmails": true, "CreateUser": true, "SendLoginLink": true}
+	posts := map[string]int{}
+	for _, file := range files {
+		for _, decl := range file.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok {
+				continue
+			}
+			if fn.Name.IsExported() && !(fn.Recv == nil && fn.Name.Name == "New") && !(fn.Recv != nil && exported[fn.Name.Name]) {
+				t.Errorf("%s: exported %s is not part of the approved surface", fset.Position(fn.Pos()), fn.Name.Name)
+			}
+		}
+		for _, decl := range file.Decls {
+			owner := "<package>"
+			if fn, ok := decl.(*ast.FuncDecl); ok {
+				owner = fn.Name.Name
+			}
+			callFuns := map[ast.Expr]bool{}
+			ast.Inspect(decl, func(n ast.Node) bool {
+				call, ok := n.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				callFuns[call.Fun] = true
+				if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
+					switch sel.Sel.Name {
+					case "do":
+						m := ast.Expr(nil)
+						if len(call.Args) > 1 {
+							m = call.Args[1]
+						}
+						ms, ok := m.(*ast.SelectorExpr)
+						id, isID := func() (*ast.Ident, bool) {
+							if !ok {
+								return nil, false
+							}
+							i, k := ms.X.(*ast.Ident)
+							return i, k
+						}()
+						if !ok || !isID || id.Name != "http" || !strings.HasPrefix(ms.Sel.Name, "Method") {
+							t.Errorf("%s: c.do must be given an http.Method* selector written in place", fset.Position(call.Pos()))
+							return true
+						}
+						switch ms.Sel.Name {
+						case "MethodGet":
+						case "MethodPost":
+							posts[owner]++
+						default:
+							t.Errorf("%s: c.do with %s", fset.Position(call.Pos()), ms.Sel.Name)
+						}
+					case "NewRequestWithContext":
+						if owner == "do" {
+							if len(call.Args) < 2 {
+								t.Errorf("%s: NewRequestWithContext arguments", fset.Position(call.Pos()))
+							} else if a, ok := call.Args[1].(*ast.Ident); !ok || a.Name != "method" {
+								t.Errorf("%s: do must pass its method parameter to NewRequestWithContext", fset.Position(call.Pos()))
+							}
+						}
+					}
+				}
+				return true
+			})
+			ast.Inspect(decl, func(n ast.Node) bool {
+				if sel, ok := n.(*ast.SelectorExpr); ok && sel.Sel.Name == "do" && !callFuns[sel] {
+					t.Errorf("%s: do used other than by calling it", fset.Position(sel.Pos()))
+				}
+				return true
+			})
+		}
+	}
+	if !reflect.DeepEqual(posts, map[string]int{"CreateUser": 1, "SendLoginLink": 1}) {
+		t.Errorf("c.do(http.MethodPost) calls: got %v", posts)
+	}
 }

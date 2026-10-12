@@ -105,3 +105,56 @@ func TestHostileValuesAreEscaped(t *testing.T) {
 		t.Fatalf("%d %s", rec.Code, body)
 	}
 }
+
+func TestDatabaseOutageIs503NotNeutral(t *testing.T) {
+	h := newHarness(t, true)
+	tok, _ := h.invite(t)
+	h.st.Close()
+	rec := httptest.NewRecorder()
+	h.h.ServeHTTP(rec, httptest.NewRequest("GET", "/i/"+tok, nil))
+	if rec.Code != 503 || strings.Contains(rec.Body.String(), "can&#39;t be used") || !strings.Contains(rec.Body.String(), "try again in a minute") {
+		t.Fatalf("%d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestRefusedApplicationLeavesInviteUsable(t *testing.T) {
+	h := newHarness(t, true)
+	tok, csrf := h.invite(t)
+	f := form(csrf)
+	f.Set("username", "-bad")
+	if rec := post(h, "/i/"+tok, f); rec.Code != 422 {
+		t.Fatalf("%d", rec.Code)
+	}
+	if rec := post(h, "/i/"+tok, form(csrf)); rec.Code != 200 {
+		t.Fatalf("invite spent by a refused application: %d", rec.Code)
+	}
+}
+
+func TestRevokedLooksLikeMalformed(t *testing.T) {
+	h := newHarness(t, true)
+	alice := flow.Member{Sub: "s-alice", Username: "alice"}
+	link, inv, err := h.flow.CreateInvite(context.Background(), alice)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.flow.Revoke(context.Background(), alice, inv.ID); err != nil {
+		t.Fatal(err)
+	}
+	get := func(p string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		h.h.ServeHTTP(rec, httptest.NewRequest("GET", p, nil))
+		return rec
+	}
+	a, b := get("/i/"+link[strings.LastIndex(link, "/")+1:]), get("/i/nope")
+	if a.Code != 404 || a.Code != b.Code || a.Body.String() != b.Body.String() {
+		t.Fatalf("revoked differs from malformed: %d vs %d", a.Code, b.Code)
+	}
+}
+
+func TestSubmitWithoutApprovalSaysCheckEmail(t *testing.T) {
+	h := newHarness(t, false)
+	tok, csrf := h.invite(t)
+	if rec := post(h, "/i/"+tok, form(csrf)); rec.Code != 200 || !strings.Contains(rec.Body.String(), "Check your email") {
+		t.Fatalf("%d %s", rec.Code, rec.Body.String())
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"crypto/subtle"
 	"errors"
 	"html/template"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -24,11 +25,23 @@ func (s *server) unusable(w http.ResponseWriter) {
 	}})
 }
 
+// openFailed answers a failed OpenInvite: the neutral page only when the invite
+// is not usable, and a 503 for anything else (the database, say).
+func (s *server) openFailed(w http.ResponseWriter, err error) {
+	if errors.Is(err, store.ErrNotUsable) {
+		s.unusable(w)
+		return
+	}
+	slog.Error("open invite failed", "error", err)
+	s.Render.page(w, http.StatusServiceUnavailable, "message.html", view{Title: "Something went wrong", Data: map[string]string{
+		"Heading": "Something went wrong", "Body": "Please try again in a minute."}})
+}
+
 func (s *server) invitePage(w http.ResponseWriter, r *http.Request) {
 	tok := r.PathValue("token")
 	inv, err := s.Flow.OpenInvite(r.Context(), tok)
 	if err != nil {
-		s.unusable(w)
+		s.openFailed(w, err)
 		return
 	}
 	th, _ := flow.TokenHash(tok)
@@ -55,11 +68,10 @@ func (s *server) inviteSubmit(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case errors.Is(err, store.ErrNotUsable):
 		s.unusable(w)
-	case errors.Is(err, flow.ErrInvalidUsername), errors.Is(err, flow.ErrInvalidEmail), errors.Is(err, flow.ErrInvalidName),
-		errors.Is(err, flow.ErrUsernameTaken), errors.Is(err, flow.ErrEmailTaken), errors.Is(err, flow.ErrNotAgreed):
+	case validationSentence(err) != "":
 		inv, oerr := s.Flow.OpenInvite(r.Context(), tok)
 		if oerr != nil {
-			s.unusable(w)
+			s.openFailed(w, oerr)
 			return
 		}
 		s.Render.page(w, http.StatusUnprocessableEntity, "invite.html", view{Title: "You have been invited",

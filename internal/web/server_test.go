@@ -14,6 +14,7 @@ import (
 	"github.com/paisans-software/paisans-invite/internal/idp"
 	"github.com/paisans-software/paisans-invite/internal/idp/idptest"
 	"github.com/paisans-software/paisans-invite/internal/mail/mailtest"
+	"github.com/paisans-software/paisans-invite/internal/store"
 	"github.com/paisans-software/paisans-invite/internal/store/storetest"
 )
 
@@ -22,6 +23,7 @@ type harness struct {
 	s    sessions
 	fake *idptest.Fake
 	flow *flow.Service
+	st   *store.Store
 }
 
 func newHarness(t *testing.T, approval bool) harness {
@@ -33,7 +35,7 @@ func newHarness(t *testing.T, approval bool) harness {
 	}, time.Now)
 	r, _ := newRenderer("", "https://id.example.org")
 	s := sessions{key: key}
-	return harness{h: NewServer(Options{Flow: f, Sessions: s, Auth: http.NotFoundHandler(), Render: r, Health: st, SessionKey: key}), s: s, fake: fake, flow: f}
+	return harness{h: NewServer(Options{Flow: f, Sessions: s, Auth: http.NotFoundHandler(), Render: r, Health: st, SessionKey: key}), s: s, fake: fake, flow: f, st: st}
 }
 
 func (h harness) as(sess Session, method, path string, form url.Values) *httptest.ResponseRecorder {

@@ -121,7 +121,7 @@ func (s *server) admin(h sessionHandler) http.HandlerFunc {
 
 func (s *server) limited(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !s.limit.allow(clientIP(r, s.TrustForwarded)) {
+		if !s.limit.allow(limitKey(clientIP(r, s.TrustForwarded))) {
 			http.Error(w, "Too many requests. Please wait a minute.", http.StatusTooManyRequests)
 			return
 		}

@@ -26,6 +26,20 @@ func clientIP(r *http.Request, trustForwarded bool) string {
 	return host
 }
 
+// limitKey is the rate limiter's bucket for a client address. An IPv6 client
+// usually holds a whole /64, so it is limited as one; IPv4, including
+// IPv4-mapped IPv6, is limited per address. Anything unparseable is its own key.
+func limitKey(addr string) string {
+	ip := net.ParseIP(addr)
+	if ip == nil {
+		return addr
+	}
+	if v4 := ip.To4(); v4 != nil {
+		return v4.String()
+	}
+	return ip.Mask(net.CIDRMask(64, 128)).String() + "/64"
+}
+
 type bucket struct {
 	l    *rate.Limiter
 	seen time.Time

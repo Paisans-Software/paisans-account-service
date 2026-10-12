@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"strconv"
 	"time"
 )
 
@@ -24,3 +25,5 @@ func (s *Store) Audit(ctx context.Context, actorSub, action, subject string) err
 	_, err := s.pool.Exec(ctx, `INSERT INTO audit (actor_sub, action, subject) VALUES (NULLIF($1,''), $2, $3)`, actorSub, action, subject)
 	return err
 }
+
+func itoa(n int64) string { return strconv.FormatInt(n, 10) }

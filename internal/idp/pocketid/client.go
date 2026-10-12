@@ -72,6 +72,13 @@ type createUserRequest struct {
 	DisplayName   string `json:"displayName"`
 }
 
+// loginLinkRequest is the whole body of the login-link write. Pocket ID's
+// default lifetime is 15 minutes; the link is sent for 168h, which its email
+// reads as "7 days". Its one field is pinned by TestWriteSurface.
+type loginLinkRequest struct {
+	TTL string `json:"ttl"`
+}
+
 func (c *Client) do(ctx context.Context, method, path string, body any, out any) error {
 	var rd io.Reader
 	if body != nil {
@@ -229,7 +236,7 @@ func (c *Client) CreateUser(ctx context.Context, u idp.NewUser) (idp.User, error
 }
 
 func (c *Client) SendLoginLink(ctx context.Context, userID string) error {
-	if err := c.do(ctx, http.MethodPost, "/api/users/"+url.PathEscape(userID)+"/one-time-access-email", struct{}{}, nil); err != nil {
+	if err := c.do(ctx, http.MethodPost, "/api/users/"+url.PathEscape(userID)+"/one-time-access-email", loginLinkRequest{TTL: "168h"}, nil); err != nil {
 		return err
 	}
 	slog.Info("identity provider write", "action", "user.login_link", "user_id", userID)

@@ -15,8 +15,8 @@ import (
 )
 
 type call struct {
-	Method, Path, Query, Key string
-	Body                     map[string]any
+	Method, Path, Query, Key, Raw string
+	Body                          map[string]any
 }
 
 func fake(t *testing.T, users []map[string]any) (*Client, *[]call) {
@@ -30,6 +30,7 @@ func fakePaged(t *testing.T, pages ...[]map[string]any) (*Client, *[]call) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		c := call{Method: r.Method, Path: r.URL.Path, Query: r.URL.RawQuery, Key: r.Header.Get("X-API-Key")}
 		if b, _ := io.ReadAll(r.Body); len(b) > 0 {
+			c.Raw = string(b)
 			json.Unmarshal(b, &c.Body)
 		}
 		calls = append(calls, c)
@@ -141,6 +142,9 @@ func TestSendLoginLink(t *testing.T) {
 	}
 	if (*calls)[0].Path != "/api/users/new-id/one-time-access-email" {
 		t.Fatal((*calls)[0].Path)
+	}
+	if got := (*calls)[0].Raw; got != `{"ttl":"168h"}` {
+		t.Fatalf("login-link body: got %s, want {\"ttl\":\"168h\"}", got)
 	}
 }
 

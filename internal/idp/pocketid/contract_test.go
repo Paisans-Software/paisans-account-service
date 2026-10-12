@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -72,22 +73,41 @@ func TestContract(t *testing.T) {
 	if err := c.SendLoginLink(ctx, u.ID); err != nil {
 		t.Fatal(err)
 	}
-	// Mailpit received a message addressed to the new user.
-	var found bool
-	for i := 0; i < 20 && !found; i++ {
-		resp, err := http.Get(os.Getenv("CONTRACT_MAILPIT_URL") + "/api/v1/search?query=to:" + name + "@example.org")
+	// Mailpit received a message addressed to the new user, and Pocket ID
+	// read the 168h lifetime: its text template says "It expires in
+	// {{.Data.ExpirationString}}.", and utils.DurationToString(168h) is "7 days".
+	mailpit := os.Getenv("CONTRACT_MAILPIT_URL")
+	var msgID string
+	for i := 0; i < 20 && msgID == ""; i++ {
+		resp, err := http.Get(mailpit + "/api/v1/search?query=to:" + name + "@example.org")
 		if err == nil {
 			var res struct {
-				Total int `json:"total"`
+				Messages []struct {
+					ID string `json:"ID"`
+				} `json:"messages"`
 			}
 			json.NewDecoder(resp.Body).Decode(&res)
 			resp.Body.Close()
-			found = res.Total > 0
+			if len(res.Messages) > 0 {
+				msgID = res.Messages[0].ID
+			}
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
-	if !found {
+	if msgID == "" {
 		t.Fatal("no login email reached Mailpit")
+	}
+	resp, err = http.Get(mailpit + "/api/v1/message/" + msgID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var msg struct {
+		Text string `json:"Text"`
+	}
+	json.NewDecoder(resp.Body).Decode(&msg)
+	resp.Body.Close()
+	if !strings.Contains(msg.Text, "It expires in 7 days.") {
+		t.Fatalf("login email does not carry the 168h lifetime:\n%s", msg.Text)
 	}
 }
 

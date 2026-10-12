@@ -134,13 +134,13 @@ func TestWriteSurface(t *testing.T) {
 					}
 				case *ast.AssignStmt:
 					for _, l := range x.Lhs {
-						checkEmailVerifiedAssign(t, fset, info, l)
+						checkPinnedFieldAssign(t, fset, info, l)
 					}
 				case *ast.IncDecStmt:
-					checkEmailVerifiedAssign(t, fset, info, x.X)
+					checkPinnedFieldAssign(t, fset, info, x.X)
 				case *ast.UnaryExpr:
 					if x.Op == token.AND {
-						checkEmailVerifiedAssign(t, fset, info, x.X)
+						checkPinnedFieldAssign(t, fset, info, x.X)
 					}
 				}
 				return true
@@ -182,15 +182,8 @@ func TestWriteSurface(t *testing.T) {
 				if !isLoginPath(call.Args[2], paramName(fn, 1)) {
 					t.Fatal(`SendLoginLink path must be "/api/users/" + url.PathEscape(userID) + "/one-time-access-email"`)
 				}
-				lit, ok := call.Args[3].(*ast.CompositeLit)
-				if st, isStruct := func() (*ast.StructType, bool) {
-					if !ok {
-						return nil, false
-					}
-					s, k := lit.Type.(*ast.StructType)
-					return s, k
-				}(); !ok || !isStruct || len(st.Fields.List) != 0 || len(lit.Elts) != 0 {
-					t.Fatal("SendLoginLink body must be an empty struct{}{}")
+				if !isLoginLinkLiteral(call.Args[3]) {
+					t.Fatal(`SendLoginLink body must be loginLinkRequest{TTL: "168h"}`)
 				}
 			}
 		}
@@ -204,6 +197,28 @@ func TestWriteSurface(t *testing.T) {
 	if !reflect.DeepEqual(fields, []string{"displayName", "email", "emailVerified", "username"}) {
 		t.Fatalf("createUserRequest fields changed: %v", fields)
 	}
+	lt := reflect.TypeOf(loginLinkRequest{})
+	if lt.NumField() != 1 || lt.Field(0).Tag.Get("json") != "ttl" {
+		t.Fatalf("loginLinkRequest must have exactly one field, json \"ttl\"")
+	}
+}
+
+// isLoginLinkLiteral reports whether e is loginLinkRequest{TTL: "168h"}, with
+// the lifetime written in place as a string literal.
+func isLoginLinkLiteral(e ast.Expr) bool {
+	lit, ok := e.(*ast.CompositeLit)
+	if !ok {
+		return false
+	}
+	if id, ok := lit.Type.(*ast.Ident); !ok || id.Name != "loginLinkRequest" || len(lit.Elts) != 1 {
+		return false
+	}
+	kv, ok := lit.Elts[0].(*ast.KeyValueExpr)
+	if !ok {
+		return false
+	}
+	key, ok := kv.Key.(*ast.Ident)
+	return ok && key.Name == "TTL" && isStr(kv.Value, "168h")
 }
 
 // checkHTTPUse resolves id through the type checker and judges it if it is
@@ -343,12 +358,13 @@ func checkDoBody(t *testing.T, fset *token.FileSet, info *types.Info, fn *ast.Fu
 	}
 }
 
-// checkEmailVerifiedAssign fails on any assignment to a field named
-// EmailVerified; the only approved setting is the literal in CreateUser.
-func checkEmailVerifiedAssign(t *testing.T, fset *token.FileSet, info *types.Info, lhs ast.Expr) {
+// checkPinnedFieldAssign fails on any assignment to a field named
+// EmailVerified or TTL; the only approved settings are the literals in
+// CreateUser and SendLoginLink.
+func checkPinnedFieldAssign(t *testing.T, fset *token.FileSet, info *types.Info, lhs ast.Expr) {
 	if sel, ok := lhs.(*ast.SelectorExpr); ok {
-		if v, ok := info.Uses[sel.Sel].(*types.Var); ok && v.IsField() && v.Name() == "EmailVerified" {
-			t.Errorf("%s: EmailVerified assigned outside the createUserRequest literal", fset.Position(lhs.Pos()))
+		if v, ok := info.Uses[sel.Sel].(*types.Var); ok && v.IsField() && (v.Name() == "EmailVerified" || v.Name() == "TTL") {
+			t.Errorf("%s: %s assigned outside its approved literal", fset.Position(lhs.Pos()), v.Name())
 		}
 	}
 }

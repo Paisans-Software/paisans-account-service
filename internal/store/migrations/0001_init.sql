@@ -23,6 +23,9 @@ CREATE TABLE applications (
   agreed_at      timestamptz NOT NULL,
   state          text NOT NULL CHECK (state IN ('pending','approving','link_unsent')),
   claimed_at     timestamptz,
+  -- claim_token is held by the one approval that may write the claimed
+  -- application's follow-up states; a takeover replaces it.
+  claim_token    text,
   idp_user_id    text,
   decided_by_sub text,
   decided_at     timestamptz

@@ -37,13 +37,14 @@ func TestSweepLeavesApplicationsBeingApproved(t *testing.T) {
 	a, _ := s.Apply(ctx, hash("a"), old, newApp("bob"))
 	s.CreateInvite(ctx, hash("b"), "sub", "alice", fresh(), now.Add(time.Hour), 0)
 	b, _ := s.Apply(ctx, hash("b"), old, newApp("carol"))
-	if _, err := s.ClaimApplication(ctx, a.ID, "admin", old); err != nil {
+	if _, _, err := s.ClaimApplication(ctx, a.ID, "admin", old); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.ClaimApplication(ctx, b.ID, "admin", now); err != nil {
+	_, claim, err := s.ClaimApplication(ctx, b.ID, "admin", now)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.MarkLinkUnsent(ctx, b.ID, "idp-1", "admin"); err != nil {
+	if err := s.MarkLinkUnsent(ctx, b.ID, claim, "idp-1", "admin"); err != nil {
 		t.Fatal(err)
 	}
 	r, err := s.Sweep(ctx, now, 14*24*time.Hour, 183*24*time.Hour)

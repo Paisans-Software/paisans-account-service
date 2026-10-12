@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"errors"
 	"time"
 
@@ -89,13 +91,20 @@ const claimTimeout = 10 * time.Minute
 
 // ClaimApplication moves a pending application, or one whose claim has gone
 // stale, to approving, so that only one approval creates its account. It
-// returns ErrBusy while another claim holds and ErrNotFound when there is no
-// application to claim.
-func (s *Store) ClaimApplication(ctx context.Context, id int64, adminSub string, now time.Time) (Application, error) {
+// returns the claim token that MarkLinkUnsent, ReleaseClaim and
+// CompleteApplication require; a takeover issues a new token, so the approval
+// it replaced can write nothing more. It returns ErrBusy while another claim
+// holds and ErrNotFound when there is no application to claim.
+func (s *Store) ClaimApplication(ctx context.Context, id int64, adminSub string, now time.Time) (Application, string, error) {
 	var a Application
+	raw := make([]byte, 16)
+	if _, err := rand.Read(raw); err != nil {
+		return Application{}, "", err
+	}
+	claim := base64.RawURLEncoding.EncodeToString(raw)
 	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
-		tag, err := tx.Exec(ctx, `UPDATE applications SET state='approving', claimed_at=$2
-			WHERE id=$1 AND (state='pending' OR (state='approving' AND claimed_at < $3))`, id, now, now.Add(-claimTimeout))
+		tag, err := tx.Exec(ctx, `UPDATE applications SET state='approving', claimed_at=$2, claim_token=$4
+			WHERE id=$1 AND (state='pending' OR (state='approving' AND claimed_at < $3))`, id, now, now.Add(-claimTimeout), claim)
 		if err != nil {
 			return err
 		}
@@ -108,19 +117,23 @@ func (s *Store) ClaimApplication(ctx context.Context, id int64, adminSub string,
 		a, err = scanApp(tx.QueryRow(ctx, `SELECT `+appColumns+` FROM applications a JOIN invites i ON i.id=a.invite_id WHERE a.id=$1`, id))
 		return err
 	})
-	return a, err
+	if err != nil {
+		return Application{}, "", err
+	}
+	return a, claim, nil
 }
 
 // ReleaseClaim returns a claimed application to pending after an approval
-// that failed before the account was recorded.
-func (s *Store) ReleaseClaim(ctx context.Context, id int64, adminSub string) error {
+// that failed before the account was recorded. Only the holder of claim may.
+func (s *Store) ReleaseClaim(ctx context.Context, id int64, claim, adminSub string) error {
 	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
-		tag, err := tx.Exec(ctx, `UPDATE applications SET state='pending', claimed_at=NULL WHERE id=$1 AND state='approving'`, id)
+		tag, err := tx.Exec(ctx, `UPDATE applications SET state='pending', claimed_at=NULL, claim_token=NULL
+			WHERE id=$1 AND state='approving' AND claim_token=$2`, id, claim)
 		if err != nil {
 			return err
 		}
 		if tag.RowsAffected() == 0 {
-			return ErrNotFound
+			return claimLost(ctx, tx, id)
 		}
 		return audit(ctx, tx, adminSub, "application.release", id)
 	})
@@ -139,27 +152,47 @@ func notFoundOrBusy(ctx context.Context, tx pgx.Tx, id int64) error {
 	return ErrNotFound
 }
 
-func (s *Store) MarkLinkUnsent(ctx context.Context, id int64, idpUserID, adminSub string) error {
+// claimLost explains a claim-guarded write that matched nothing: ErrBusy if
+// the application still exists (its claim is not, or no longer, this one),
+// ErrNotFound if it is gone.
+func claimLost(ctx context.Context, tx pgx.Tx, id int64) error {
+	var exists bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM applications WHERE id=$1)`, id).Scan(&exists); err != nil {
+		return err
+	}
+	if exists {
+		return ErrBusy
+	}
+	return ErrNotFound
+}
+
+// MarkLinkUnsent records the account created for an application its caller
+// holds claim on.
+func (s *Store) MarkLinkUnsent(ctx context.Context, id int64, claim, idpUserID, adminSub string) error {
 	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx, `UPDATE applications SET state='link_unsent', idp_user_id=$2, decided_by_sub=NULLIF($3,''), decided_at=now()
-			WHERE id=$1 AND state='approving'`, id, idpUserID, adminSub)
+			WHERE id=$1 AND state='approving' AND claim_token=$4`, id, idpUserID, adminSub, claim)
 		if err != nil {
 			return err
 		}
 		if tag.RowsAffected() == 0 {
-			return ErrNotFound
+			return claimLost(ctx, tx, id)
 		}
 		return audit(ctx, tx, adminSub, "application.link_unsent", id)
 	})
 }
 
-func (s *Store) CompleteApplication(ctx context.Context, id int64, adminSub string) error {
+// CompleteApplication finishes an application whose sign-in link was sent: one
+// in link_unsent, or one in approving whose claim the caller holds.
+func (s *Store) CompleteApplication(ctx context.Context, id int64, claim, adminSub string) error {
 	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
 		var inviteID int64
 		var username string
-		err := tx.QueryRow(ctx, `DELETE FROM applications WHERE id=$1 RETURNING invite_id, username`, id).Scan(&inviteID, &username)
+		err := tx.QueryRow(ctx, `DELETE FROM applications
+			WHERE id=$1 AND (state='link_unsent' OR (state='approving' AND claim_token=$2))
+			RETURNING invite_id, username`, id, claim).Scan(&inviteID, &username)
 		if errors.Is(err, pgx.ErrNoRows) {
-			return ErrNotFound
+			return claimLost(ctx, tx, id)
 		}
 		if err != nil {
 			return err

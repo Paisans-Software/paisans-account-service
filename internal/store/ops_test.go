@@ -129,7 +129,11 @@ func TestCompleteAndDecline(t *testing.T) {
 	exp := time.Now().Add(time.Hour)
 	s.CreateInvite(ctx, hash("a"), "sub", "alice", fresh(), exp, 1)
 	a, _ := s.Apply(ctx, hash("a"), time.Now(), newApp("bob"))
-	if err := s.CompleteApplication(ctx, a.ID, "admin"); err != nil {
+	if err := s.CompleteApplication(ctx, a.ID, "", "admin"); !errors.Is(err, store.ErrBusy) {
+		t.Fatalf("a pending application cannot be completed: %v", err)
+	}
+	_, claim, _ := s.ClaimApplication(ctx, a.ID, "admin", time.Now())
+	if err := s.CompleteApplication(ctx, a.ID, claim, "admin"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.Application(ctx, a.ID); !errors.Is(err, store.ErrNotFound) {
@@ -168,33 +172,40 @@ func TestClaimApplication(t *testing.T) {
 	t0 := time.Now()
 	s.CreateInvite(ctx, hash("a"), "sub", "alice", fresh(), t0.Add(time.Hour), 3)
 	a, _ := s.Apply(ctx, hash("a"), t0, newApp("bob"))
-	if err := s.MarkLinkUnsent(ctx, a.ID, "idp-1", "admin"); !errors.Is(err, store.ErrNotFound) {
+	if err := s.MarkLinkUnsent(ctx, a.ID, "", "idp-1", "admin"); !errors.Is(err, store.ErrBusy) {
 		t.Fatalf("an unclaimed application cannot be marked link_unsent: %v", err)
 	}
-	got, err := s.ClaimApplication(ctx, a.ID, "admin", t0)
-	if err != nil || got.State != "approving" || got.Username != "bob" {
-		t.Fatalf("%+v %v", got, err)
+	got, first, err := s.ClaimApplication(ctx, a.ID, "admin", t0)
+	if err != nil || got.State != "approving" || got.Username != "bob" || first == "" {
+		t.Fatalf("%+v %q %v", got, first, err)
 	}
-	if _, err := s.ClaimApplication(ctx, a.ID, "other", t0.Add(5*time.Minute)); !errors.Is(err, store.ErrBusy) {
+	if _, _, err := s.ClaimApplication(ctx, a.ID, "other", t0.Add(5*time.Minute)); !errors.Is(err, store.ErrBusy) {
 		t.Fatalf("a live claim must refuse another: %v", err)
 	}
 	if err := s.DeclineApplication(ctx, a.ID, "other", hash("bob@example.org")); !errors.Is(err, store.ErrBusy) {
 		t.Fatalf("a claimed application cannot be declined: %v", err)
 	}
 	// A claim older than ten minutes is a crashed approval and can be taken over.
-	if _, err := s.ClaimApplication(ctx, a.ID, "other", t0.Add(11*time.Minute)); err != nil {
-		t.Fatalf("a stale claim must be claimable: %v", err)
+	_, second, err := s.ClaimApplication(ctx, a.ID, "other", t0.Add(11*time.Minute))
+	if err != nil || second == first {
+		t.Fatalf("a stale claim must be claimable, with a new token: %v", err)
 	}
-	if err := s.ReleaseClaim(ctx, a.ID, "other"); err != nil {
+	if err := s.ReleaseClaim(ctx, a.ID, first, "admin"); !errors.Is(err, store.ErrBusy) {
+		t.Fatalf("a taken-over claim cannot be released by its old holder: %v", err)
+	}
+	if err := s.ReleaseClaim(ctx, a.ID, second, "other"); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.ReleaseClaim(ctx, a.ID, "other"); !errors.Is(err, store.ErrNotFound) {
+	if err := s.ReleaseClaim(ctx, a.ID, second, "other"); !errors.Is(err, store.ErrBusy) {
 		t.Fatalf("only a claimed application can be released: %v", err)
 	}
 	if err := s.DeclineApplication(ctx, a.ID, "other", hash("bob@example.org")); err != nil {
 		t.Fatalf("a released application can be declined: %v", err)
 	}
-	if _, err := s.ClaimApplication(ctx, a.ID, "other", t0); !errors.Is(err, store.ErrNotFound) {
+	if _, _, err := s.ClaimApplication(ctx, a.ID, "other", t0); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("a missing application: %v", err)
+	}
+	if err := s.ReleaseClaim(ctx, a.ID, second, "other"); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("a missing application: %v", err)
 	}
 }
@@ -209,7 +220,7 @@ func TestClaimConcurrent(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			_, errs[i] = s.ClaimApplication(ctx, a.ID, "admin", time.Now())
+			_, _, errs[i] = s.ClaimApplication(ctx, a.ID, "admin", time.Now())
 		}(i)
 	}
 	wg.Wait()
@@ -295,13 +306,14 @@ func TestDismissApplication(t *testing.T) {
 	if err := s.DismissApplication(ctx, a.ID, "admin", t0); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("a pending application is declined, not dismissed: %v", err)
 	}
-	if _, err := s.ClaimApplication(ctx, a.ID, "admin", t0); err != nil {
+	_, claim, err := s.ClaimApplication(ctx, a.ID, "admin", t0)
+	if err != nil {
 		t.Fatal(err)
 	}
 	if err := s.DismissApplication(ctx, a.ID, "admin", t0.Add(5*time.Minute)); !errors.Is(err, store.ErrBusy) {
 		t.Fatalf("a live claim cannot be dismissed: %v", err)
 	}
-	if err := s.MarkLinkUnsent(ctx, a.ID, "idp-1", "admin"); err != nil {
+	if err := s.MarkLinkUnsent(ctx, a.ID, claim, "idp-1", "admin"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.CreateInvite(ctx, hash("b"), "sub", "alice", fresh(), exp, 1); !errors.Is(err, store.ErrQuota) {
@@ -333,7 +345,7 @@ func TestDismissStaleClaim(t *testing.T) {
 	t0 := time.Now()
 	s.CreateInvite(ctx, hash("a"), "sub", "alice", fresh(), t0.Add(time.Hour), 1)
 	a, _ := s.Apply(ctx, hash("a"), t0, newApp("bob"))
-	if _, err := s.ClaimApplication(ctx, a.ID, "admin", t0); err != nil {
+	if _, _, err := s.ClaimApplication(ctx, a.ID, "admin", t0); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.DismissApplication(ctx, a.ID, "admin", t0.Add(11*time.Minute)); err != nil {
@@ -341,5 +353,44 @@ func TestDismissStaleClaim(t *testing.T) {
 	}
 	if _, err := s.Application(ctx, a.ID); !errors.Is(err, store.ErrNotFound) {
 		t.Fatal("dismissed application remains")
+	}
+}
+
+// An approval whose claim was taken over can write nothing more; the
+// approval that took it over proceeds.
+func TestTakenOverClaimWritesNothing(t *testing.T) {
+	s := storetest.New(t)
+	now := time.Now()
+	s.CreateInvite(ctx, hash("a"), "sub", "alice", fresh(), now.Add(time.Hour), 3)
+	app, _ := s.Apply(ctx, hash("a"), now, newApp("bob"))
+	_, a, err := s.ClaimApplication(ctx, app.ID, "admin-a", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A's claim ages past the takeover window, as if A had stalled.
+	if _, err := storetest.Conn(t, s).Exec(ctx, `UPDATE applications SET claimed_at = claimed_at - interval '11 minutes' WHERE id=$1`, app.ID); err != nil {
+		t.Fatal(err)
+	}
+	_, b, err := s.ClaimApplication(ctx, app.ID, "admin-b", now)
+	if err != nil {
+		t.Fatalf("B takes the stale claim over: %v", err)
+	}
+	if err := s.MarkLinkUnsent(ctx, app.ID, a, "idp-a", "admin-a"); !errors.Is(err, store.ErrBusy) {
+		t.Fatalf("A's MarkLinkUnsent: %v", err)
+	}
+	if err := s.ReleaseClaim(ctx, app.ID, a, "admin-a"); !errors.Is(err, store.ErrBusy) {
+		t.Fatalf("A's ReleaseClaim: %v", err)
+	}
+	if err := s.CompleteApplication(ctx, app.ID, a, "admin-a"); !errors.Is(err, store.ErrBusy) {
+		t.Fatalf("A's CompleteApplication: %v", err)
+	}
+	if err := s.MarkLinkUnsent(ctx, app.ID, b, "idp-b", "admin-b"); err != nil {
+		t.Fatalf("B proceeds: %v", err)
+	}
+	if got, _ := s.Application(ctx, app.ID); got.IDPUserID != "idp-b" {
+		t.Fatalf("B's account recorded: %+v", got)
+	}
+	if err := s.CompleteApplication(ctx, app.ID, b, "admin-b"); err != nil {
+		t.Fatal(err)
 	}
 }

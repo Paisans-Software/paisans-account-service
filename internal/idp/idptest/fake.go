@@ -24,6 +24,9 @@ type Fake struct {
 	// OnCreate, if set, runs at the start of CreateUser, outside the lock, so
 	// a test can act while an approval is in progress.
 	OnCreate func()
+	// AfterCreate, if set, runs once CreateUser has made the account, outside
+	// the lock, so a test can act between the account and its recording.
+	AfterCreate func()
 }
 
 func (f *Fake) UsernameTaken(_ context.Context, n string) (bool, error) {
@@ -88,6 +91,11 @@ func (f *Fake) CreateUser(_ context.Context, n idp.NewUser) (idp.User, error) {
 	f.Created++
 	u := idp.User{ID: fmt.Sprintf("id-%d", f.Created), Username: n.Username, Email: strings.TrimSpace(n.Email)}
 	f.Users = append(f.Users, u)
+	if after := f.AfterCreate; after != nil {
+		f.mu.Unlock()
+		after()
+		f.mu.Lock()
+	}
 	return u, nil
 }
 

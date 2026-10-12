@@ -370,3 +370,44 @@ func TestDismiss(t *testing.T) {
 		t.Fatalf("audit: %v", got)
 	}
 }
+
+// An approval that stalls past the takeover window and loses its claim stops
+// with ErrBusy and never sends a link; the approval that took over sends one.
+func TestTakenOverApprovalSendsNothing(t *testing.T) {
+	s, f, _, st := setupStore(t, true)
+	link, _, _ := s.CreateInvite(ctx, alice, flow.NewNonce())
+	s.Apply(ctx, token(t, link), bob())
+	p, _ := s.Pending(ctx)
+	id := p[0].ID
+	conn := storetest.Conn(t, st)
+	age := func() {
+		if _, err := conn.Exec(ctx, `UPDATE applications SET claimed_at = claimed_at - interval '11 minutes' WHERE id=$1`, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f.AfterCreate = func() {
+		f.AfterCreate = nil
+		age()
+		if _, _, err := st.ClaimApplication(ctx, id, "s-other", time.Now()); err != nil {
+			t.Errorf("takeover: %v", err)
+		}
+	}
+	if err := s.Approve(ctx, root, id); !errors.Is(err, store.ErrBusy) {
+		t.Fatalf("the stalled approval: %v", err)
+	}
+	if f.LinksSent != 0 {
+		t.Fatalf("a link was sent after the claim was lost: %d", f.LinksSent)
+	}
+	if p, _ := s.Pending(ctx); len(p) != 1 || p[0].State != "approving" {
+		t.Fatalf("the takeover's claim stands: %+v", p)
+	}
+	// The takeover's own approval (here: a later one, once that claim is stale
+	// too) adopts the account rather than creating a second.
+	age()
+	if err := s.Approve(ctx, root, id); err != nil {
+		t.Fatal(err)
+	}
+	if f.Created != 1 || f.LinksSent != 1 {
+		t.Fatalf("created=%d links=%d", f.Created, f.LinksSent)
+	}
+}

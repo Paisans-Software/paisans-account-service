@@ -156,3 +156,66 @@ func TestRevokeOnlyOwnOpen(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestClaimApplication(t *testing.T) {
+	s := storetest.New(t)
+	t0 := time.Now()
+	s.CreateInvite(ctx, hash("a"), "sub", "alice", t0.Add(time.Hour), 3)
+	a, _ := s.Apply(ctx, hash("a"), t0, newApp("bob"))
+	if err := s.MarkLinkUnsent(ctx, a.ID, "idp-1", "admin"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("an unclaimed application cannot be marked link_unsent: %v", err)
+	}
+	got, err := s.ClaimApplication(ctx, a.ID, "admin", t0)
+	if err != nil || got.State != "approving" || got.Username != "bob" {
+		t.Fatalf("%+v %v", got, err)
+	}
+	if _, err := s.ClaimApplication(ctx, a.ID, "other", t0.Add(5*time.Minute)); !errors.Is(err, store.ErrBusy) {
+		t.Fatalf("a live claim must refuse another: %v", err)
+	}
+	if err := s.DeclineApplication(ctx, a.ID, "other", hash("bob@example.org")); !errors.Is(err, store.ErrBusy) {
+		t.Fatalf("a claimed application cannot be declined: %v", err)
+	}
+	// A claim older than ten minutes is a crashed approval and can be taken over.
+	if _, err := s.ClaimApplication(ctx, a.ID, "other", t0.Add(11*time.Minute)); err != nil {
+		t.Fatalf("a stale claim must be claimable: %v", err)
+	}
+	if err := s.ReleaseClaim(ctx, a.ID, "other"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ReleaseClaim(ctx, a.ID, "other"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("only a claimed application can be released: %v", err)
+	}
+	if err := s.DeclineApplication(ctx, a.ID, "other", hash("bob@example.org")); err != nil {
+		t.Fatalf("a released application can be declined: %v", err)
+	}
+	if _, err := s.ClaimApplication(ctx, a.ID, "other", t0); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("a missing application: %v", err)
+	}
+}
+
+func TestClaimConcurrent(t *testing.T) {
+	s := storetest.New(t)
+	s.CreateInvite(ctx, hash("a"), "sub", "alice", time.Now().Add(time.Hour), 3)
+	a, _ := s.Apply(ctx, hash("a"), time.Now(), newApp("bob"))
+	var wg sync.WaitGroup
+	errs := make([]error, 8)
+	for i := range errs {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			_, errs[i] = s.ClaimApplication(ctx, a.ID, "admin", time.Now())
+		}(i)
+	}
+	wg.Wait()
+	ok := 0
+	for _, err := range errs {
+		if err == nil {
+			ok++
+		} else if !errors.Is(err, store.ErrBusy) {
+			t.Fatalf("unexpected error %v", err)
+		}
+	}
+	if ok != 1 {
+		t.Fatalf("want exactly one claim, got %d", ok)
+	}
+}

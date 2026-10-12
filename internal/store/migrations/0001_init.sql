@@ -17,7 +17,8 @@ CREATE TABLE applications (
   display_name   text NOT NULL,
   coc_version    text NOT NULL,
   agreed_at      timestamptz NOT NULL,
-  state          text NOT NULL CHECK (state IN ('pending','link_unsent')),
+  state          text NOT NULL CHECK (state IN ('pending','approving','link_unsent')),
+  claimed_at     timestamptz,
   idp_user_id    text,
   decided_by_sub text,
   decided_at     timestamptz

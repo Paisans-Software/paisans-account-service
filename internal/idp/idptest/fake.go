@@ -21,6 +21,9 @@ type Fake struct {
 	// FailLookup makes every read fail, as an unreachable provider would.
 	FailLookup         error
 	Created, LinksSent int
+	// OnCreate, if set, runs at the start of CreateUser, outside the lock, so
+	// a test can act while an approval is in progress.
+	OnCreate func()
 }
 
 func (f *Fake) UsernameTaken(_ context.Context, n string) (bool, error) {
@@ -74,6 +77,9 @@ func (f *Fake) AdminGroupEmails(_ context.Context, group string) ([]string, erro
 }
 
 func (f *Fake) CreateUser(_ context.Context, n idp.NewUser) (idp.User, error) {
+	if f.OnCreate != nil {
+		f.OnCreate()
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.FailCreate != nil {

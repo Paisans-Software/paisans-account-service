@@ -83,9 +83,66 @@ func (s *Store) PendingApplications(ctx context.Context) ([]Application, error) 
 	return pgx.CollectRows(rows, func(r pgx.CollectableRow) (Application, error) { return scanApp(r) })
 }
 
+// claimTimeout is how long a claim holds before another approval may take it
+// over, as after a crash between claiming and recording the account.
+const claimTimeout = 10 * time.Minute
+
+// ClaimApplication moves a pending application, or one whose claim has gone
+// stale, to approving, so that only one approval creates its account. It
+// returns ErrBusy while another claim holds and ErrNotFound when there is no
+// application to claim.
+func (s *Store) ClaimApplication(ctx context.Context, id int64, adminSub string, now time.Time) (Application, error) {
+	var a Application
+	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `UPDATE applications SET state='approving', claimed_at=$2
+			WHERE id=$1 AND (state='pending' OR (state='approving' AND claimed_at < $3))`, id, now, now.Add(-claimTimeout))
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() == 0 {
+			return notFoundOrBusy(ctx, tx, id)
+		}
+		if err := audit(ctx, tx, adminSub, "application.claim", id); err != nil {
+			return err
+		}
+		a, err = scanApp(tx.QueryRow(ctx, `SELECT `+appColumns+` FROM applications a JOIN invites i ON i.id=a.invite_id WHERE a.id=$1`, id))
+		return err
+	})
+	return a, err
+}
+
+// ReleaseClaim returns a claimed application to pending after an approval
+// that failed before the account was recorded.
+func (s *Store) ReleaseClaim(ctx context.Context, id int64, adminSub string) error {
+	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `UPDATE applications SET state='pending', claimed_at=NULL WHERE id=$1 AND state='approving'`, id)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() == 0 {
+			return ErrNotFound
+		}
+		return audit(ctx, tx, adminSub, "application.release", id)
+	})
+}
+
+// notFoundOrBusy explains a statement that matched no application: ErrBusy if
+// it is claimed, ErrNotFound otherwise.
+func notFoundOrBusy(ctx context.Context, tx pgx.Tx, id int64) error {
+	var busy bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM applications WHERE id=$1 AND state='approving')`, id).Scan(&busy); err != nil {
+		return err
+	}
+	if busy {
+		return ErrBusy
+	}
+	return ErrNotFound
+}
+
 func (s *Store) MarkLinkUnsent(ctx context.Context, id int64, idpUserID, adminSub string) error {
 	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
-		tag, err := tx.Exec(ctx, `UPDATE applications SET state='link_unsent', idp_user_id=$2, decided_by_sub=NULLIF($3,''), decided_at=now() WHERE id=$1`, id, idpUserID, adminSub)
+		tag, err := tx.Exec(ctx, `UPDATE applications SET state='link_unsent', idp_user_id=$2, decided_by_sub=NULLIF($3,''), decided_at=now()
+			WHERE id=$1 AND state='approving'`, id, idpUserID, adminSub)
 		if err != nil {
 			return err
 		}
@@ -123,7 +180,7 @@ func (s *Store) DeclineApplication(ctx context.Context, id int64, adminSub strin
 		var inviteID int64
 		err := tx.QueryRow(ctx, `DELETE FROM applications WHERE id=$1 AND state='pending' RETURNING invite_id`, id).Scan(&inviteID)
 		if errors.Is(err, pgx.ErrNoRows) {
-			return ErrNotFound
+			return notFoundOrBusy(ctx, tx, id)
 		}
 		if err != nil {
 			return err

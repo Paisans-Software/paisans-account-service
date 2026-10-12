@@ -14,6 +14,9 @@ var (
 	ErrNotUsable     = errors.New("invite cannot be used")
 	ErrUsernameTaken = errors.New("username taken")
 	ErrNotFound      = errors.New("not found")
+	// ErrBusy is an application another admin (or the automatic approval) has
+	// claimed and is still deciding.
+	ErrBusy = errors.New("application is being decided")
 )
 
 type Invite struct {

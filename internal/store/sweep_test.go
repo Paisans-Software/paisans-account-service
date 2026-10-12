@@ -28,3 +28,29 @@ func TestSweep(t *testing.T) {
 		t.Fatal("stale application must be deleted")
 	}
 }
+
+func TestSweepLeavesApplicationsBeingApproved(t *testing.T) {
+	s := storetest.New(t)
+	now := time.Now()
+	old := now.Add(-20 * 24 * time.Hour)
+	s.CreateInvite(ctx, hash("a"), "sub", "alice", now.Add(time.Hour), 0)
+	a, _ := s.Apply(ctx, hash("a"), old, newApp("bob"))
+	s.CreateInvite(ctx, hash("b"), "sub", "alice", now.Add(time.Hour), 0)
+	b, _ := s.Apply(ctx, hash("b"), old, newApp("carol"))
+	if _, err := s.ClaimApplication(ctx, a.ID, "admin", old); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ClaimApplication(ctx, b.ID, "admin", now); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.MarkLinkUnsent(ctx, b.ID, "idp-1", "admin"); err != nil {
+		t.Fatal(err)
+	}
+	r, err := s.Sweep(ctx, now, 14*24*time.Hour, 183*24*time.Hour)
+	if err != nil || r.ApplicationsExpired != 0 {
+		t.Fatalf("%+v %v", r, err)
+	}
+	if apps, _ := s.PendingApplications(ctx); len(apps) != 2 {
+		t.Fatalf("approving and link_unsent applications must survive the sweep: %d", len(apps))
+	}
+}

@@ -257,31 +257,17 @@ func (s *Service) approve(ctx context.Context, adminSub string, app store.Applic
 		}
 		userID = u.ID
 	} else {
-		// A previous attempt may have created the account and then failed to
-		// record it. An account with this username and this applicant's email
-		// is that account, not a clash.
-		u, found, err := s.p.FindUser(ctx, app.Username)
+		// The claim makes this approval the only one that may create the
+		// account; a second admin, or a double submit, is refused as busy.
+		claimed, err := s.st.ClaimApplication(ctx, app.ID, adminSub, s.now())
 		if err != nil {
 			return err
 		}
-		if found && strings.EqualFold(strings.TrimSpace(u.Email), app.Email) {
-			userID = u.ID
-		} else {
-			if err := s.available(ctx, app.Username, app.Email, true); err != nil {
-				return err
-			}
-			u, err := s.p.CreateUser(ctx, idp.NewUser{Username: app.Username, Email: app.Email, DisplayName: app.DisplayName})
-			if err != nil {
-				return err
-			}
-			userID = u.ID
-			s.audit(ctx, adminSub, "idp.user_create", app.ID)
-			slog.Info("write", "action", "idp.user_create", "application_id", app.ID)
-		}
-		if err := s.st.MarkLinkUnsent(ctx, app.ID, userID, adminSub); err != nil {
+		slog.Info("write", "action", "application.claim", "application_id", app.ID)
+		if userID, err = s.createAccount(ctx, adminSub, claimed); err != nil {
+			s.release(ctx, adminSub, app.ID)
 			return err
 		}
-		slog.Info("write", "action", "application.link_unsent", "application_id", app.ID)
 	}
 	if err := s.p.SendLoginLink(ctx, userID); err != nil {
 		return fmt.Errorf("the account exists but its sign-in link was not sent; retry: %w", err)
@@ -293,6 +279,46 @@ func (s *Service) approve(ctx context.Context, adminSub string, app store.Applic
 	}
 	slog.Info("write", "action", "application.complete", "application_id", app.ID)
 	return nil
+}
+
+// createAccount creates the claimed application's account, or adopts the one
+// a previous attempt created, and records it as link_unsent.
+func (s *Service) createAccount(ctx context.Context, adminSub string, app store.Application) (string, error) {
+	// A previous attempt may have created the account and then failed to
+	// record it. An account with this username and this applicant's email is
+	// that account, not a clash.
+	u, found, err := s.p.FindUser(ctx, app.Username)
+	if err != nil {
+		return "", err
+	}
+	userID := u.ID
+	if !found || !strings.EqualFold(strings.TrimSpace(u.Email), app.Email) {
+		if err := s.available(ctx, app.Username, app.Email, true); err != nil {
+			return "", err
+		}
+		u, err := s.p.CreateUser(ctx, idp.NewUser{Username: app.Username, Email: app.Email, DisplayName: app.DisplayName})
+		if err != nil {
+			return "", err
+		}
+		userID = u.ID
+		s.audit(ctx, adminSub, "idp.user_create", app.ID)
+		slog.Info("write", "action", "idp.user_create", "application_id", app.ID)
+	}
+	if err := s.st.MarkLinkUnsent(ctx, app.ID, userID, adminSub); err != nil {
+		return "", err
+	}
+	slog.Info("write", "action", "application.link_unsent", "application_id", app.ID)
+	return userID, nil
+}
+
+// release returns a claim after a failed approval. If it cannot, the claim
+// lapses on its own after the store's timeout.
+func (s *Service) release(ctx context.Context, adminSub string, id int64) {
+	if err := s.st.ReleaseClaim(context.WithoutCancel(ctx), id, adminSub); err != nil {
+		slog.Warn("could not release an approval claim", "application_id", id, "error", err)
+		return
+	}
+	slog.Info("write", "action", "application.release", "application_id", id)
 }
 
 func (s *Service) Decline(ctx context.Context, admin Member, id int64) error {

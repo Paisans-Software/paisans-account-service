@@ -170,6 +170,10 @@ func TestApproveRechecksUsername(t *testing.T) {
 	if err := s.Approve(ctx, root, p[0].ID); !errors.Is(err, flow.ErrUsernameTaken) || f.Created != 0 {
 		t.Fatalf("err=%v created=%d", err, f.Created)
 	}
+	// The failed approval released its claim, so the admin can decline.
+	if err := s.Decline(ctx, root, p[0].ID); err != nil {
+		t.Fatalf("decline after a refused approval: %v", err)
+	}
 }
 
 func TestNonAdminCannotDecide(t *testing.T) {
@@ -252,5 +256,51 @@ func TestWaitingNoticeGoesToAdminGroupOnly(t *testing.T) {
 	}
 	if len(m.To("root@x.org")) != 1 || len(m.To("alice@x.org")) != 0 {
 		t.Fatal("only the admin group is told an application is waiting")
+	}
+}
+
+func TestApprovalInProgressRefusesOthers(t *testing.T) {
+	s, f, _ := setup(t, true)
+	link, _, _ := s.CreateInvite(ctx, alice)
+	s.Apply(ctx, token(t, link), bob())
+	p, _ := s.Pending(ctx)
+	var second, decline error
+	once := false
+	// While the first approval is creating the account, a second admin tries
+	// to approve and another to decline.
+	f.OnCreate = func() {
+		if once {
+			return
+		}
+		once = true
+		second = s.Approve(ctx, root, p[0].ID)
+		decline = s.Decline(ctx, root, p[0].ID)
+	}
+	if err := s.Approve(ctx, root, p[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	if !errors.Is(second, store.ErrBusy) || !errors.Is(decline, store.ErrBusy) {
+		t.Fatalf("second approve: %v, decline: %v", second, decline)
+	}
+	if f.Created != 1 || f.LinksSent != 1 {
+		t.Fatalf("created=%d links=%d", f.Created, f.LinksSent)
+	}
+}
+
+func TestFailedCreateReleasesClaim(t *testing.T) {
+	s, f, _ := setup(t, true)
+	link, _, _ := s.CreateInvite(ctx, alice)
+	s.Apply(ctx, token(t, link), bob())
+	p, _ := s.Pending(ctx)
+	f.FailCreate = errors.New("pocket id down")
+	if err := s.Approve(ctx, root, p[0].ID); err == nil {
+		t.Fatal("want the create failure reported")
+	}
+	if p, _ = s.Pending(ctx); p[0].State != "pending" {
+		t.Fatalf("state %q", p[0].State)
+	}
+	f.FailCreate = nil
+	if err := s.Approve(ctx, root, p[0].ID); err != nil || f.Created != 1 {
+		t.Fatalf("err=%v created=%d", err, f.Created)
 	}
 }

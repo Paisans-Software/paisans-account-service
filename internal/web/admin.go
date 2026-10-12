@@ -16,6 +16,7 @@ var decisionErrors = map[string]string{
 	"username_taken": "That username is now taken. Decline the application, or ask the person to apply again with another.",
 	"email_taken":    "An account already uses that email address.",
 	"not_found":      "That application no longer exists.",
+	"busy":           "Someone else is deciding this application; refresh in a moment.",
 	"forbidden":      "Only admins can do that.",
 	"failed":         "That did not work. The identity provider or database may be unavailable; try again.",
 }
@@ -28,6 +29,8 @@ func decisionCode(err error) string {
 		return "email_taken"
 	case errors.Is(err, store.ErrNotFound):
 		return "not_found"
+	case errors.Is(err, store.ErrBusy):
+		return "busy"
 	case errors.Is(err, flow.ErrForbidden):
 		return "forbidden"
 	}

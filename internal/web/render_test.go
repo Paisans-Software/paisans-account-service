@@ -88,6 +88,7 @@ func TestEveryPageExecutes(t *testing.T) {
 		"admin.html": []application{
 			{"a1", "Bob", "bob", "b@example.org", "alice", "pending", now, declines{2, now}},
 			{"a2", "Cy", "cy", "c@example.org", "alice", "link_unsent", now, declines{}},
+			{"a3", "Di", "di", "d@example.org", "alice", "approving", now, declines{}},
 		},
 		"invite.html":  map[string]string{"Inviter": "alice", "CoC": "Be kind.", "Username": "bob", "DisplayName": "Bob", "Email": "b@example.org"},
 		"message.html": map[string]string{"Heading": "Hello", "Body": "b"},

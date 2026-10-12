@@ -27,6 +27,9 @@ type Fake struct {
 	// AfterCreate, if set, runs once CreateUser has made the account, outside
 	// the lock, so a test can act between the account and its recording.
 	AfterCreate func()
+	// OnSendLink, if set, runs at the start of SendLoginLink, outside the
+	// lock, so a test can act while a link is being sent.
+	OnSendLink func()
 }
 
 func (f *Fake) UsernameTaken(_ context.Context, n string) (bool, error) {
@@ -100,6 +103,9 @@ func (f *Fake) CreateUser(_ context.Context, n idp.NewUser) (idp.User, error) {
 }
 
 func (f *Fake) SendLoginLink(context.Context, string) error {
+	if f.OnSendLink != nil {
+		f.OnSendLink()
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.FailSendLink != nil {

@@ -431,3 +431,47 @@ func TestRenderedPagesCarryCSP(t *testing.T) {
 		}
 	}
 }
+
+// The admin page offers Dismiss on an approving row only once its claim has
+// outlived the takeover window.
+func TestAdminOffersDismissForStaleApproval(t *testing.T) {
+	h := newHarness(t, true)
+	applyBob(t, h)
+	p, _ := h.flow.Pending(context.Background())
+	id := itoa(p[0].ID)
+	if _, _, err := h.st.ClaimApplication(context.Background(), p[0].ID, "s-root", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	action := `action="/admin/applications/` + id + `/dismiss"`
+	note := "Dismissing stops tracking this application. If the account exists in Pocket ID, deal with it there."
+	if body := h.as(admin, "GET", "/admin", nil).Body.String(); strings.Contains(body, action) || strings.Contains(body, note) {
+		t.Fatalf("fresh claim offers dismiss: %s", body)
+	}
+	if _, err := storetest.Conn(t, h.st).Exec(context.Background(), `UPDATE applications SET claimed_at = claimed_at - interval '11 minutes'`); err != nil {
+		t.Fatal(err)
+	}
+	if body := h.as(admin, "GET", "/admin", nil).Body.String(); !strings.Contains(body, action) || !strings.Contains(body, note) {
+		t.Fatalf("stale claim offers no dismiss: %s", body)
+	}
+}
+
+// A retry that finds another retry sending the link is told the application
+// is busy.
+func TestConcurrentRetryShowsBusy(t *testing.T) {
+	h := newHarness(t, true)
+	applyBob(t, h)
+	p, _ := h.flow.Pending(context.Background())
+	id := itoa(p[0].ID)
+	h.fake.FailSendLink = errors.New("smtp down")
+	h.as(admin, "POST", "/admin/applications/"+id+"/approve", url.Values{"csrf": {"tok"}})
+	h.fake.FailSendLink = nil
+	var second *httptest.ResponseRecorder
+	h.fake.OnSendLink = func() {
+		h.fake.OnSendLink = nil
+		second = h.as(admin, "POST", "/admin/applications/"+id+"/approve", url.Values{"csrf": {"tok"}})
+	}
+	first := h.as(admin, "POST", "/admin/applications/"+id+"/approve", url.Values{"csrf": {"tok"}})
+	if first.Header().Get("Location") != "/admin" || second.Header().Get("Location") != "/admin?error=busy" || h.fake.LinksSent != 1 {
+		t.Fatalf("first %s, second %s, links %d", first.Header().Get("Location"), second.Header().Get("Location"), h.fake.LinksSent)
+	}
+}

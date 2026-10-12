@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -409,5 +410,83 @@ func TestTakenOverApprovalSendsNothing(t *testing.T) {
 	}
 	if f.Created != 1 || f.LinksSent != 1 {
 		t.Fatalf("created=%d links=%d", f.Created, f.LinksSent)
+	}
+}
+
+// linkUnsent leaves bob's application with its account created and its link
+// not sent.
+func linkUnsent(t *testing.T, s *flow.Service, f *idptest.Fake) int64 {
+	t.Helper()
+	link, _, _ := s.CreateInvite(ctx, alice, flow.NewNonce())
+	s.Apply(ctx, token(t, link), bob())
+	p, _ := s.Pending(ctx)
+	f.FailSendLink = errors.New("smtp down")
+	if err := s.Approve(ctx, root, p[0].ID); err == nil {
+		t.Fatal("want the send failure")
+	}
+	f.FailSendLink = nil
+	return p[0].ID
+}
+
+// A retry started while another retry is sending the link is refused as busy.
+func TestRetryWhileSendingIsBusy(t *testing.T) {
+	s, f, _ := setup(t, true)
+	id := linkUnsent(t, s, f)
+	var second error
+	f.OnSendLink = func() {
+		f.OnSendLink = nil
+		second = s.Approve(ctx, root, id)
+	}
+	if err := s.Approve(ctx, root, id); err != nil {
+		t.Fatal(err)
+	}
+	if !errors.Is(second, store.ErrBusy) || f.LinksSent != 1 {
+		t.Fatalf("second retry: %v, links=%d", second, f.LinksSent)
+	}
+}
+
+// Concurrent retries send at most one link.
+func TestConcurrentRetriesSendOneLink(t *testing.T) {
+	s, f, _ := setup(t, true)
+	id := linkUnsent(t, s, f)
+	var wg sync.WaitGroup
+	errs := make([]error, 8)
+	for i := range errs {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			errs[i] = s.Approve(ctx, root, id)
+		}(i)
+	}
+	wg.Wait()
+	ok := 0
+	for _, err := range errs {
+		switch {
+		case err == nil:
+			ok++
+		case errors.Is(err, store.ErrBusy), errors.Is(err, store.ErrNotFound):
+		default:
+			t.Fatalf("unexpected error %v", err)
+		}
+	}
+	if ok != 1 || f.LinksSent != 1 || f.Created != 1 {
+		t.Fatalf("ok=%d links=%d created=%d", ok, f.LinksSent, f.Created)
+	}
+}
+
+func TestPendingMarksStaleApprovals(t *testing.T) {
+	s, _, _, st := setupStore(t, true)
+	link, _, _ := s.CreateInvite(ctx, alice, flow.NewNonce())
+	s.Apply(ctx, token(t, link), bob())
+	p, _ := s.Pending(ctx)
+	if _, _, err := st.ClaimApplication(ctx, p[0].ID, "s-root", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if p, _ := s.Pending(ctx); p[0].Stale {
+		t.Fatal("a fresh claim is not stale")
+	}
+	storetest.Conn(t, st).Exec(ctx, `UPDATE applications SET claimed_at = claimed_at - interval '11 minutes'`)
+	if p, _ := s.Pending(ctx); !p[0].Stale {
+		t.Fatal("an old claim is stale")
 	}
 }

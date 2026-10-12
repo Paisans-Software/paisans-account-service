@@ -60,6 +60,9 @@ type Applicant struct {
 type Pending struct {
 	store.Application
 	Declines store.DeclineHistory
+	// Stale is an approving application whose claim has outlived the
+	// takeover window: it may be approved again, or dismissed.
+	Stale bool
 }
 
 type Service struct {
@@ -255,7 +258,7 @@ func (s *Service) Pending(ctx context.Context) ([]Pending, error) {
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, Pending{Application: a, Declines: d})
+		out = append(out, Pending{Application: a, Declines: d, Stale: a.State == "approving" && a.ClaimStale(s.now())})
 	}
 	return out, nil
 }
@@ -272,34 +275,25 @@ func (s *Service) Approve(ctx context.Context, admin Member, id int64) error {
 }
 
 func (s *Service) approve(ctx context.Context, adminSub string, app store.Application) error {
-	userID := app.IDPUserID
-	claim := ""
-	if app.State == "link_unsent" {
-		u, found, err := s.p.FindUser(ctx, app.Username)
-		if err != nil {
-			return err
+	// The claim makes this approval the only one that may create the account
+	// and the only one that may send its link; a second admin, a double
+	// submit or a second retry is refused as busy.
+	claimed, claim, err := s.st.ClaimApplication(ctx, app.ID, adminSub, s.now())
+	if err != nil {
+		return err
+	}
+	slog.Info("write", "action", "application.claim", "application_id", app.ID)
+	userID, err := s.accountFor(ctx, adminSub, claimed, claim)
+	if err != nil {
+		if !lostClaim(err) {
+			s.release(ctx, adminSub, app.ID, claim)
 		}
-		if !found {
-			return fmt.Errorf("account %d was created but cannot be found at the identity provider", app.ID)
-		}
-		userID = u.ID
-	} else {
-		// The claim makes this approval the only one that may create the
-		// account; a second admin, or a double submit, is refused as busy.
-		claimed, token, err := s.st.ClaimApplication(ctx, app.ID, adminSub, s.now())
-		if err != nil {
-			return err
-		}
-		claim = token
-		slog.Info("write", "action", "application.claim", "application_id", app.ID)
-		if userID, err = s.createAccount(ctx, adminSub, claimed, claim); err != nil {
-			if !lostClaim(err) {
-				s.release(ctx, adminSub, app.ID, claim)
-			}
-			return err
-		}
+		return err
 	}
 	if err := s.p.SendLoginLink(ctx, userID); err != nil {
+		// The application is link_unsent now; releasing the claim leaves it
+		// ready for a retry.
+		s.release(ctx, adminSub, app.ID, claim)
 		return fmt.Errorf("the account exists but its sign-in link was not sent; retry: %w", err)
 	}
 	s.audit(ctx, adminSub, "idp.login_link", app.ID, "")
@@ -309,6 +303,22 @@ func (s *Service) approve(ctx context.Context, adminSub string, app store.Applic
 	}
 	slog.Info("write", "action", "application.complete", "application_id", app.ID)
 	return nil
+}
+
+// accountFor returns the provider account of a claimed application: the one
+// already recorded for a retry, or one created (or adopted) now.
+func (s *Service) accountFor(ctx context.Context, adminSub string, app store.Application, claim string) (string, error) {
+	if app.State != "link_unsent" {
+		return s.createAccount(ctx, adminSub, app, claim)
+	}
+	u, found, err := s.p.FindUser(ctx, app.Username)
+	if err != nil {
+		return "", err
+	}
+	if !found {
+		return "", fmt.Errorf("account %d was created but cannot be found at the identity provider", app.ID)
+	}
+	return u.ID, nil
 }
 
 // createAccount creates the claimed application's account, or adopts the one

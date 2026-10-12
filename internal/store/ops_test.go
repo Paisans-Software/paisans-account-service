@@ -319,6 +319,12 @@ func TestDismissApplication(t *testing.T) {
 	if _, err := s.CreateInvite(ctx, hash("b"), "sub", "alice", fresh(), exp, 1); !errors.Is(err, store.ErrQuota) {
 		t.Fatalf("the slot is still in use: %v", err)
 	}
+	if err := s.DismissApplication(ctx, a.ID, "admin", t0); !errors.Is(err, store.ErrBusy) {
+		t.Fatalf("a link_unsent application whose link is being sent cannot be dismissed: %v", err)
+	}
+	if err := s.ReleaseClaim(ctx, a.ID, claim, "admin"); err != nil {
+		t.Fatal(err)
+	}
 	if err := s.DismissApplication(ctx, a.ID, "admin", t0); err != nil {
 		t.Fatal(err)
 	}
@@ -437,7 +443,7 @@ func TestEveryWriteIsAudited(t *testing.T) {
 		t.Fatal(err)
 	}
 	auditOnce(t, s, "application.link_unsent", a.ID)
-	if err := s.CompleteApplication(ctx, a.ID, "", "admin"); err != nil {
+	if err := s.CompleteApplication(ctx, a.ID, claim, "admin"); err != nil {
 		t.Fatal(err)
 	}
 	auditOnce(t, s, "application.complete", a.ID)
@@ -473,11 +479,41 @@ func TestMarkLinkUnsent(t *testing.T) {
 	if err := s.MarkLinkUnsent(ctx, a.ID, claim, "idp-8", "admin"); !errors.Is(err, store.ErrBusy) {
 		t.Fatalf("a link_unsent application is not marked again: %v", err)
 	}
-	if _, _, err := s.ClaimApplication(ctx, a.ID, "admin", now.Add(time.Hour)); !errors.Is(err, store.ErrNotFound) {
-		t.Fatalf("a link_unsent application cannot be claimed: %v", err)
-	}
 	if got, _ := s.Application(ctx, a.ID); got.IDPUserID != "idp-7" {
 		t.Fatalf("recorded account changed: %+v", got)
+	}
+}
+
+// A retry claims a link_unsent application without changing its state, so
+// that only one retry sends the link.
+func TestRetryClaim(t *testing.T) {
+	s := storetest.New(t)
+	now := time.Now()
+	s.CreateInvite(ctx, hash("a"), "sub", "alice", fresh(), now.Add(time.Hour), 3)
+	a, _ := s.Apply(ctx, hash("a"), now, newApp("bob"))
+	_, first, _ := s.ClaimApplication(ctx, a.ID, "admin", now)
+	s.MarkLinkUnsent(ctx, a.ID, first, "idp-7", "admin")
+	if _, _, err := s.ClaimApplication(ctx, a.ID, "other", now.Add(5*time.Minute)); !errors.Is(err, store.ErrBusy) {
+		t.Fatalf("the approval sending the link still holds it: %v", err)
+	}
+	if err := s.ReleaseClaim(ctx, a.ID, first, "admin"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.Application(ctx, a.ID); got.State != "link_unsent" || !got.ClaimedAt.IsZero() {
+		t.Fatalf("a released link_unsent application stays link_unsent, unclaimed: %+v", got)
+	}
+	got, retry, err := s.ClaimApplication(ctx, a.ID, "other", now)
+	if err != nil || got.State != "link_unsent" || got.IDPUserID != "idp-7" {
+		t.Fatalf("retry claim: %+v %v", got, err)
+	}
+	if _, _, err := s.ClaimApplication(ctx, a.ID, "third", now); !errors.Is(err, store.ErrBusy) {
+		t.Fatalf("a second retry: %v", err)
+	}
+	if err := s.CompleteApplication(ctx, a.ID, first, "admin"); !errors.Is(err, store.ErrBusy) {
+		t.Fatalf("only the retry's claim completes: %v", err)
+	}
+	if err := s.CompleteApplication(ctx, a.ID, retry, "other"); err != nil {
+		t.Fatal(err)
 	}
 }
 

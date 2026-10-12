@@ -74,6 +74,7 @@ func TestEveryPageExecutes(t *testing.T) {
 		ID, DisplayName, Username, Email, InviterUsername, State string
 		AgreedAt                                                 time.Time
 		Declines                                                 declines
+		Stale                                                    bool
 	}
 	type invite struct {
 		ID, State string
@@ -86,9 +87,10 @@ func TestEveryPageExecutes(t *testing.T) {
 			"Invites": []invite{{"i1", "open", now}, {"i2", "used", now}},
 		},
 		"admin.html": []application{
-			{"a1", "Bob", "bob", "b@example.org", "alice", "pending", now, declines{2, now}},
-			{"a2", "Cy", "cy", "c@example.org", "alice", "link_unsent", now, declines{}},
-			{"a3", "Di", "di", "d@example.org", "alice", "approving", now, declines{}},
+			{"a1", "Bob", "bob", "b@example.org", "alice", "pending", now, declines{2, now}, false},
+			{"a2", "Cy", "cy", "c@example.org", "alice", "link_unsent", now, declines{}, false},
+			{"a3", "Di", "di", "d@example.org", "alice", "approving", now, declines{}, false},
+			{"a4", "Ed", "ed", "e@example.org", "alice", "approving", now, declines{}, true},
 		},
 		"invite.html":  map[string]string{"Inviter": "alice", "CoC": "Be kind.", "Username": "bob", "DisplayName": "Bob", "Email": "b@example.org"},
 		"message.html": map[string]string{"Heading": "Hello", "Body": "b"},

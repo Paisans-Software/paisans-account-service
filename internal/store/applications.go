@@ -17,17 +17,23 @@ type Application struct {
 	AgreedAt                                 time.Time
 	State, IDPUserID                         string
 	InviterSub, InviterUsername              string
+	// ClaimedAt is when the current claim was taken, or zero if none is held.
+	ClaimedAt time.Time
 }
 
 type NewApplication struct{ Username, Email, DisplayName, CoCVersion string }
 
 const appColumns = `a.id, a.invite_id, a.username, a.email, a.display_name, a.coc_version, a.agreed_at,
-	a.state, COALESCE(a.idp_user_id,''), i.inviter_sub, i.inviter_username`
+	a.state, COALESCE(a.idp_user_id,''), i.inviter_sub, i.inviter_username, a.claimed_at`
 
 func scanApp(r pgx.Row) (Application, error) {
 	var a Application
+	var claimed *time.Time
 	err := r.Scan(&a.ID, &a.InviteID, &a.Username, &a.Email, &a.DisplayName, &a.CoCVersion, &a.AgreedAt,
-		&a.State, &a.IDPUserID, &a.InviterSub, &a.InviterUsername)
+		&a.State, &a.IDPUserID, &a.InviterSub, &a.InviterUsername, &claimed)
+	if claimed != nil {
+		a.ClaimedAt = *claimed
+	}
 	return a, err
 }
 
@@ -85,16 +91,25 @@ func (s *Store) PendingApplications(ctx context.Context) ([]Application, error) 
 	return pgx.CollectRows(rows, func(r pgx.CollectableRow) (Application, error) { return scanApp(r) })
 }
 
-// claimTimeout is how long a claim holds before another approval may take it
+// ClaimTimeout is how long a claim holds before another approval may take it
 // over, as after a crash between claiming and recording the account.
-const claimTimeout = 10 * time.Minute
+const ClaimTimeout = 10 * time.Minute
 
-// ClaimApplication moves a pending application, or one whose claim has gone
-// stale, to approving, so that only one approval creates its account. It
-// returns the claim token that MarkLinkUnsent, ReleaseClaim and
-// CompleteApplication require; a takeover issues a new token, so the approval
-// it replaced can write nothing more. It returns ErrBusy while another claim
-// holds and ErrNotFound when there is no application to claim.
+const claimTimeout = ClaimTimeout
+
+// ClaimStale reports whether a's claim has outlived the takeover window at now.
+func (a Application) ClaimStale(now time.Time) bool {
+	return !a.ClaimedAt.IsZero() && a.ClaimedAt.Before(now.Add(-ClaimTimeout))
+}
+
+// ClaimApplication claims an application for one approval, so that only one
+// creates its account and only one sends its sign-in link. A pending
+// application moves to approving; a link_unsent one keeps its state and is
+// claimed for a retry. Either may be claimed while it holds no claim or its
+// claim has gone stale. It returns the claim token that MarkLinkUnsent,
+// ReleaseClaim and CompleteApplication require; a takeover issues a new token,
+// so the approval it replaced can write nothing more. It returns ErrBusy while
+// another claim holds and ErrNotFound when there is no application to claim.
 func (s *Store) ClaimApplication(ctx context.Context, id int64, adminSub string, now time.Time) (Application, string, error) {
 	var a Application
 	raw := make([]byte, 16)
@@ -103,8 +118,11 @@ func (s *Store) ClaimApplication(ctx context.Context, id int64, adminSub string,
 	}
 	claim := base64.RawURLEncoding.EncodeToString(raw)
 	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
-		tag, err := tx.Exec(ctx, `UPDATE applications SET state='approving', claimed_at=$2, claim_token=$4
-			WHERE id=$1 AND (state='pending' OR (state='approving' AND claimed_at < $3))`, id, now, now.Add(-claimTimeout), claim)
+		tag, err := tx.Exec(ctx, `UPDATE applications
+			SET state=CASE WHEN state='pending' THEN 'approving' ELSE state END, claimed_at=$2, claim_token=$4
+			WHERE id=$1 AND (state='pending'
+				OR (state IN ('approving','link_unsent') AND (claim_token IS NULL OR claimed_at < $3)))`,
+			id, now, now.Add(-claimTimeout), claim)
 		if err != nil {
 			return err
 		}
@@ -123,12 +141,14 @@ func (s *Store) ClaimApplication(ctx context.Context, id int64, adminSub string,
 	return a, claim, nil
 }
 
-// ReleaseClaim returns a claimed application to pending after an approval
-// that failed before the account was recorded. Only the holder of claim may.
+// ReleaseClaim gives up a claim after a failed approval: an approving
+// application returns to pending, a link_unsent one stays link_unsent with no
+// claim, ready for a retry. Only the holder of claim may.
 func (s *Store) ReleaseClaim(ctx context.Context, id int64, claim, adminSub string) error {
 	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
-		tag, err := tx.Exec(ctx, `UPDATE applications SET state='pending', claimed_at=NULL, claim_token=NULL
-			WHERE id=$1 AND state='approving' AND claim_token=$2`, id, claim)
+		tag, err := tx.Exec(ctx, `UPDATE applications
+			SET state=CASE WHEN state='approving' THEN 'pending' ELSE state END, claimed_at=NULL, claim_token=NULL
+			WHERE id=$1 AND state IN ('approving','link_unsent') AND claim_token=$2`, id, claim)
 		if err != nil {
 			return err
 		}
@@ -140,10 +160,10 @@ func (s *Store) ReleaseClaim(ctx context.Context, id int64, claim, adminSub stri
 }
 
 // notFoundOrBusy explains a statement that matched no application: ErrBusy if
-// it is claimed, ErrNotFound otherwise.
+// it holds a claim, ErrNotFound otherwise.
 func notFoundOrBusy(ctx context.Context, tx pgx.Tx, id int64) error {
 	var busy bool
-	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM applications WHERE id=$1 AND state='approving')`, id).Scan(&busy); err != nil {
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM applications WHERE id=$1 AND claim_token IS NOT NULL)`, id).Scan(&busy); err != nil {
 		return err
 	}
 	if busy {
@@ -182,14 +202,14 @@ func (s *Store) MarkLinkUnsent(ctx context.Context, id int64, claim, idpUserID, 
 	})
 }
 
-// CompleteApplication finishes an application whose sign-in link was sent: one
-// in link_unsent, or one in approving whose claim the caller holds.
+// CompleteApplication finishes an application whose sign-in link was sent by
+// the holder of claim.
 func (s *Store) CompleteApplication(ctx context.Context, id int64, claim, adminSub string) error {
 	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
 		var inviteID int64
 		var username string
 		err := tx.QueryRow(ctx, `DELETE FROM applications
-			WHERE id=$1 AND (state='link_unsent' OR (state='approving' AND claim_token=$2))
+			WHERE id=$1 AND state IN ('approving','link_unsent') AND claim_token=$2
 			RETURNING invite_id, username`, id, claim).Scan(&inviteID, &username)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return claimLost(ctx, tx, id)
@@ -209,15 +229,15 @@ func (s *Store) CompleteApplication(ctx context.Context, id int64, claim, adminS
 }
 
 // DismissApplication stops tracking an application whose account may exist
-// but whose sign-in link was never sent: one in link_unsent, or one whose
-// approval claim has gone stale. It deletes the application and expires its
-// invite, which frees the inviter's slot. A pending application is
+// but whose sign-in link was never sent: one in link_unsent, or one in
+// approving, that holds no live claim. It deletes the application and expires
+// its invite, which frees the inviter's slot. A pending application is
 // ErrNotFound (it is declined, not dismissed); a live claim is ErrBusy.
 func (s *Store) DismissApplication(ctx context.Context, id int64, adminSub string, now time.Time) error {
 	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
 		var inviteID int64
 		err := tx.QueryRow(ctx, `DELETE FROM applications
-			WHERE id=$1 AND (state='link_unsent' OR (state='approving' AND claimed_at < $2))
+			WHERE id=$1 AND state IN ('link_unsent','approving') AND (claim_token IS NULL OR claimed_at < $2)
 			RETURNING invite_id`, id, now.Add(-claimTimeout)).Scan(&inviteID)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return notFoundOrBusy(ctx, tx, id)

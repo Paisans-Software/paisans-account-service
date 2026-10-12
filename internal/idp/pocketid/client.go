@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -21,8 +22,27 @@ type Client struct {
 	hc        *http.Client
 }
 
+var _ idp.Provider = (*Client)(nil)
+
+// New copies hc so that a redirect is an error: the API key header must never
+// follow a 3xx to another place.
 func New(baseURL, apiKey string, hc *http.Client) *Client {
-	return &Client{base: strings.TrimRight(baseURL, "/"), key: apiKey, hc: hc}
+	var cp http.Client
+	if hc != nil {
+		cp = *hc
+	}
+	cp.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	return &Client{base: strings.TrimRight(baseURL, "/"), key: apiKey, hc: &cp}
+}
+
+// withoutURL drops the *url.Error wrapper, whose message carries the whole
+// request URL and with it any query.
+func withoutURL(err error) error {
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		return ue.Err
+	}
+	return err
 }
 
 type userDTO struct {
@@ -60,7 +80,7 @@ func (c *Client) do(ctx context.Context, method, path string, body any, out any)
 	}
 	req, err := http.NewRequestWithContext(ctx, method, c.base+path, rd)
 	if err != nil {
-		return err
+		return fmt.Errorf("identity provider %s %s: %w", method, pathOnly(path), withoutURL(err))
 	}
 	req.Header.Set("X-API-Key", c.key)
 	req.Header.Set("Accept", "application/json")
@@ -69,7 +89,7 @@ func (c *Client) do(ctx context.Context, method, path string, body any, out any)
 	}
 	resp, err := c.hc.Do(req)
 	if err != nil {
-		return fmt.Errorf("identity provider %s %s: %w", method, pathOnly(path), err)
+		return fmt.Errorf("identity provider %s %s: %w", method, pathOnly(path), withoutURL(err))
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode/100 != 2 {
@@ -84,10 +104,12 @@ func (c *Client) do(ctx context.Context, method, path string, body any, out any)
 
 func pathOnly(p string) string { return strings.SplitN(p, "?", 2)[0] }
 
-func (c *Client) search(ctx context.Context, term string) ([]idp.User, error) {
+// listUsers returns every user. Pocket ID's search is a case-sensitive LIKE on
+// Postgres, so callers filter the full list themselves.
+func (c *Client) listUsers(ctx context.Context) ([]idp.User, error) {
 	var users []idp.User
 	for page := 1; ; page++ {
-		q := url.Values{"search": {term}, "pagination[page]": {fmt.Sprint(page)}, "pagination[limit]": {"100"}}
+		q := url.Values{"pagination[page]": {fmt.Sprint(page)}, "pagination[limit]": {"100"}}
 		var res struct {
 			Data       []userDTO `json:"data"`
 			Pagination struct {
@@ -107,7 +129,7 @@ func (c *Client) search(ctx context.Context, term string) ([]idp.User, error) {
 }
 
 func (c *Client) FindUser(ctx context.Context, username string) (idp.User, bool, error) {
-	users, err := c.search(ctx, username)
+	users, err := c.listUsers(ctx)
 	if err != nil {
 		return idp.User{}, false, err
 	}
@@ -126,7 +148,7 @@ func (c *Client) UsernameTaken(ctx context.Context, username string) (bool, erro
 
 func (c *Client) EmailTaken(ctx context.Context, email string) (bool, error) {
 	email = strings.TrimSpace(email)
-	users, err := c.search(ctx, email)
+	users, err := c.listUsers(ctx)
 	if err != nil {
 		return false, err
 	}
@@ -139,7 +161,7 @@ func (c *Client) EmailTaken(ctx context.Context, email string) (bool, error) {
 }
 
 func (c *Client) AdminEmails(ctx context.Context) ([]string, error) {
-	users, err := c.search(ctx, "")
+	users, err := c.listUsers(ctx)
 	if err != nil {
 		return nil, err
 	}

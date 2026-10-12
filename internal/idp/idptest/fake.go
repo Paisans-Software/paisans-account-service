@@ -10,6 +10,8 @@ import (
 	"github.com/paisans-software/paisans-invite/internal/idp"
 )
 
+var _ idp.Provider = (*Fake)(nil)
+
 type Fake struct {
 	mu                       sync.Mutex
 	Users                    []idp.User
@@ -49,7 +51,7 @@ func (f *Fake) AdminEmails(context.Context) ([]string, error) {
 	defer f.mu.Unlock()
 	var out []string
 	for _, u := range f.Users {
-		if u.IsAdmin {
+		if u.IsAdmin && u.Email != "" {
 			out = append(out, u.Email)
 		}
 	}
@@ -63,7 +65,7 @@ func (f *Fake) CreateUser(_ context.Context, n idp.NewUser) (idp.User, error) {
 		return idp.User{}, f.FailCreate
 	}
 	f.Created++
-	u := idp.User{ID: fmt.Sprintf("id-%d", f.Created), Username: n.Username, Email: n.Email}
+	u := idp.User{ID: fmt.Sprintf("id-%d", f.Created), Username: n.Username, Email: strings.TrimSpace(n.Email)}
 	f.Users = append(f.Users, u)
 	return u, nil
 }

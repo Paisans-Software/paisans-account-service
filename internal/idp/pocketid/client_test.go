@@ -3,9 +3,11 @@ package pocketid
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -18,6 +20,12 @@ type call struct {
 }
 
 func fake(t *testing.T, users []map[string]any) (*Client, *[]call) {
+	return fakePaged(t, users)
+}
+
+// fakePaged serves one page per argument. It honours the search query the way
+// Pocket ID does on Postgres: a case-sensitive substring match.
+func fakePaged(t *testing.T, pages ...[]map[string]any) (*Client, *[]call) {
 	var calls []call
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		c := call{Method: r.Method, Path: r.URL.Path, Query: r.URL.RawQuery, Key: r.Header.Get("X-API-Key")}
@@ -27,7 +35,20 @@ func fake(t *testing.T, users []map[string]any) (*Client, *[]call) {
 		calls = append(calls, c)
 		switch {
 		case r.Method == "GET" && r.URL.Path == "/api/users":
-			json.NewEncoder(w).Encode(map[string]any{"data": users, "pagination": map[string]any{"totalPages": 1, "currentPage": 1}})
+			page := 1
+			fmt.Sscan(r.URL.Query().Get("pagination[page]"), &page)
+			var data []map[string]any
+			if page >= 1 && page <= len(pages) {
+				for _, u := range pages[page-1] {
+					term := r.URL.Query().Get("search")
+					name, _ := u["username"].(string)
+					email, _ := u["email"].(string)
+					if term == "" || strings.Contains(name, term) || strings.Contains(email, term) {
+						data = append(data, u)
+					}
+				}
+			}
+			json.NewEncoder(w).Encode(map[string]any{"data": data, "pagination": map[string]any{"totalPages": len(pages), "currentPage": page}})
 		case r.Method == "POST" && r.URL.Path == "/api/users":
 			w.WriteHeader(201)
 			json.NewEncoder(w).Encode(map[string]any{"id": "new-id", "username": c.Body["username"], "email": c.Body["email"]})
@@ -48,6 +69,41 @@ func TestUsernameTakenCaseInsensitive(t *testing.T) {
 	}
 	if taken, _ := c.UsernameTaken(context.Background(), "alic"); taken {
 		t.Fatal("a search hit that is not an exact match is not taken")
+	}
+}
+
+func TestListingAsksForLargePages(t *testing.T) {
+	c, calls := fake(t, []map[string]any{{"id": "1", "username": "a", "email": "a@x.org"}})
+	c.UsernameTaken(context.Background(), "a")
+	c.EmailTaken(context.Background(), "a@x.org")
+	c.AdminEmails(context.Background())
+	if len(*calls) != 3 {
+		t.Fatalf("want 3 requests, got %d", len(*calls))
+	}
+	for _, got := range *calls {
+		q, err := url.ParseQuery(got.Query)
+		if err != nil || got.Method != "GET" || q.Get("pagination[limit]") != "100" {
+			t.Fatalf("bad listing request: %+v", got)
+		}
+	}
+}
+
+func TestReadsEveryPage(t *testing.T) {
+	c, calls := fakePaged(t,
+		[]map[string]any{{"id": "1", "username": "a", "email": "a@x.org"}},
+		[]map[string]any{{"id": "2", "username": "Zed", "email": "Z@X.org"}},
+	)
+	if taken, err := c.UsernameTaken(context.Background(), "zed"); err != nil || !taken {
+		t.Fatalf("a user on page 2 must be found: %v %v", taken, err)
+	}
+	if taken, _ := c.EmailTaken(context.Background(), "z@x.org"); !taken {
+		t.Fatal("an email on page 2 must be found")
+	}
+	if len(*calls) != 4 {
+		t.Fatalf("want 2 requests per lookup, got %d", len(*calls))
+	}
+	if q, _ := url.ParseQuery((*calls)[1].Query); q.Get("pagination[page]") != "2" {
+		t.Fatalf("second request did not ask for page 2: %q", (*calls)[1].Query)
 	}
 }
 
@@ -110,5 +166,45 @@ func TestErrorsDoNotEchoBodies(t *testing.T) {
 	_, err := New(srv.URL, "KEY", srv.Client()).CreateUser(context.Background(), idp.NewUser{Username: "x", Email: "x@x.org"})
 	if err == nil || strings.Contains(err.Error(), "SECRET-IN-BODY") || strings.Contains(err.Error(), "KEY") {
 		t.Fatalf("error must carry status and path only: %v", err)
+	}
+}
+
+func TestTransportErrorsDoNotEchoQuery(t *testing.T) {
+	srv := httptest.NewServer(http.NotFoundHandler())
+	base := srv.URL
+	srv.Close()
+	c := New(base, "KEY", nil)
+	check := func(err error) {
+		t.Helper()
+		if err == nil {
+			t.Fatal("want an error from a closed port")
+		}
+		for _, bad := range []string{"secret", "example.org", "KEY", "search"} {
+			if strings.Contains(err.Error(), bad) {
+				t.Fatalf("error leaks %q: %v", bad, err)
+			}
+		}
+	}
+	_, err := c.EmailTaken(context.Background(), "secret@example.org")
+	check(err)
+	check(c.do(context.Background(), http.MethodGet, "/api/users?search=secret%40example.org", nil, nil))
+	check(New("://bad", "KEY", nil).do(context.Background(), http.MethodGet, "/api/users?search=secret%40example.org", nil, nil))
+}
+
+func TestRedirectIsAnError(t *testing.T) {
+	followed := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/elsewhere" {
+			followed = true
+			return
+		}
+		http.Redirect(w, r, "/elsewhere", http.StatusFound)
+	}))
+	defer srv.Close()
+	if _, err := New(srv.URL, "KEY", srv.Client()).EmailTaken(context.Background(), "a@x.org"); err == nil {
+		t.Fatal("a 302 must be an error")
+	}
+	if followed {
+		t.Fatal("the redirect target was requested")
 	}
 }

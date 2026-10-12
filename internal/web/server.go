@@ -62,6 +62,7 @@ func NewServer(o Options) http.Handler {
 	mux.HandleFunc("GET /admin", s.admin(s.queue))
 	mux.HandleFunc("POST /admin/applications/{id}/approve", s.admin(s.approve))
 	mux.HandleFunc("POST /admin/applications/{id}/decline", s.admin(s.decline))
+	mux.HandleFunc("POST /admin/applications/{id}/dismiss", s.admin(s.dismiss))
 	mux.HandleFunc("GET /i/{token}", s.limited(s.invitePage))
 	mux.HandleFunc("POST /i/{token}", s.limited(s.inviteSubmit))
 	return securityHeaders(mux)

@@ -344,3 +344,29 @@ func TestCreateInviteNonce(t *testing.T) {
 		t.Fatalf("want one invite, got %d", len(inv))
 	}
 }
+
+func TestDismiss(t *testing.T) {
+	s, f, _, st := setupStore(t, true)
+	link, _, _ := s.CreateInvite(ctx, alice, flow.NewNonce())
+	s.Apply(ctx, token(t, link), bob())
+	p, _ := s.Pending(ctx)
+	if err := s.Dismiss(ctx, root, p[0].ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("pending: %v", err)
+	}
+	f.FailSendLink = errors.New("smtp down")
+	if err := s.Approve(ctx, root, p[0].ID); err == nil {
+		t.Fatal("want the send failure")
+	}
+	if err := s.Dismiss(ctx, alice, p[0].ID); !errors.Is(err, flow.ErrForbidden) {
+		t.Fatalf("members cannot dismiss: %v", err)
+	}
+	if err := s.Dismiss(ctx, root, p[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	if p, _ := s.Pending(ctx); len(p) != 0 {
+		t.Fatal("still listed")
+	}
+	if got, _ := st.AuditSubjects(ctx, "application.dismiss"); len(got) != 1 {
+		t.Fatalf("audit: %v", got)
+	}
+}

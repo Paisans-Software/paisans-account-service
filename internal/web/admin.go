@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -47,18 +48,15 @@ func (s *server) queue(w http.ResponseWriter, r *http.Request, sess Session) {
 	s.Render.page(w, 200, "admin.html", v)
 }
 
-func (s *server) decide(w http.ResponseWriter, r *http.Request, sess Session, approve bool) {
+type decision func(*flow.Service, context.Context, flow.Member, int64) error
+
+func (s *server) decide(w http.ResponseWriter, r *http.Request, sess Session, act decision) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		http.NotFound(w, r)
 		return
 	}
-	if approve {
-		err = s.Flow.Approve(r.Context(), sess.member(), id)
-	} else {
-		err = s.Flow.Decline(r.Context(), sess.member(), id)
-	}
-	if err != nil {
+	if err := act(s.Flow, r.Context(), sess.member(), id); err != nil {
 		slog.Warn("decision failed", "application_id", id, "error", err)
 		http.Redirect(w, r, "/admin?error="+decisionCode(err), http.StatusSeeOther)
 		return
@@ -67,8 +65,11 @@ func (s *server) decide(w http.ResponseWriter, r *http.Request, sess Session, ap
 }
 
 func (s *server) approve(w http.ResponseWriter, r *http.Request, sess Session) {
-	s.decide(w, r, sess, true)
+	s.decide(w, r, sess, (*flow.Service).Approve)
 }
 func (s *server) decline(w http.ResponseWriter, r *http.Request, sess Session) {
-	s.decide(w, r, sess, false)
+	s.decide(w, r, sess, (*flow.Service).Decline)
+}
+func (s *server) dismiss(w http.ResponseWriter, r *http.Request, sess Session) {
+	s.decide(w, r, sess, (*flow.Service).Dismiss)
 }

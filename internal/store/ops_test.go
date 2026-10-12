@@ -285,3 +285,61 @@ func TestCreateNonceConcurrent(t *testing.T) {
 		t.Fatalf("want exactly one invite, got %d (%d rows)", ok, len(inv))
 	}
 }
+
+func TestDismissApplication(t *testing.T) {
+	s := storetest.New(t)
+	t0 := time.Now()
+	exp := t0.Add(time.Hour)
+	inv, _ := s.CreateInvite(ctx, hash("a"), "sub", "alice", fresh(), exp, 1)
+	a, _ := s.Apply(ctx, hash("a"), t0, newApp("bob"))
+	if err := s.DismissApplication(ctx, a.ID, "admin", t0); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("a pending application is declined, not dismissed: %v", err)
+	}
+	if _, err := s.ClaimApplication(ctx, a.ID, "admin", t0); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DismissApplication(ctx, a.ID, "admin", t0.Add(5*time.Minute)); !errors.Is(err, store.ErrBusy) {
+		t.Fatalf("a live claim cannot be dismissed: %v", err)
+	}
+	if err := s.MarkLinkUnsent(ctx, a.ID, "idp-1", "admin"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateInvite(ctx, hash("b"), "sub", "alice", fresh(), exp, 1); !errors.Is(err, store.ErrQuota) {
+		t.Fatalf("the slot is still in use: %v", err)
+	}
+	if err := s.DismissApplication(ctx, a.ID, "admin", t0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Application(ctx, a.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatal("a dismissed application is deleted")
+	}
+	if list, _ := s.ListInvites(ctx, "sub"); len(list) != 1 || list[0].ID != inv.ID || list[0].State != "expired" {
+		t.Fatalf("the invite is expired: %+v", list)
+	}
+	if _, err := s.CreateInvite(ctx, hash("b"), "sub", "alice", fresh(), exp, 1); err != nil {
+		t.Fatalf("dismissing frees the slot: %v", err)
+	}
+	if got, _ := s.AuditSubjects(ctx, "application.dismiss"); len(got) != 1 || got[0] != fmt.Sprint(a.ID) {
+		t.Fatalf("audit: %v", got)
+	}
+	if err := s.DismissApplication(ctx, a.ID, "admin", t0); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("a second dismiss: %v", err)
+	}
+}
+
+// An approval whose claim has outlived the takeover window can be dismissed.
+func TestDismissStaleClaim(t *testing.T) {
+	s := storetest.New(t)
+	t0 := time.Now()
+	s.CreateInvite(ctx, hash("a"), "sub", "alice", fresh(), t0.Add(time.Hour), 1)
+	a, _ := s.Apply(ctx, hash("a"), t0, newApp("bob"))
+	if _, err := s.ClaimApplication(ctx, a.ID, "admin", t0); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DismissApplication(ctx, a.ID, "admin", t0.Add(11*time.Minute)); err != nil {
+		t.Fatalf("a stale claim can be dismissed: %v", err)
+	}
+	if _, err := s.Application(ctx, a.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatal("dismissed application remains")
+	}
+}

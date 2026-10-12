@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -178,6 +179,7 @@ func TestCSRFRefusedOnEveryPost(t *testing.T) {
 		{member, "/invites/" + itoa(inv[0].ID) + "/revoke"},
 		{admin, "/admin/applications/" + id + "/approve"},
 		{admin, "/admin/applications/" + id + "/decline"},
+		{admin, "/admin/applications/" + id + "/dismiss"},
 	} {
 		if rec := h.as(c.s, "POST", c.path, url.Values{"csrf": {"wrong"}}); rec.Code != 403 {
 			t.Fatalf("%s: %d", c.path, rec.Code)
@@ -342,5 +344,37 @@ func TestHomeRendersFreshNonce(t *testing.T) {
 	b := re.FindStringSubmatch(h.as(member, "GET", "/", nil).Body.String())
 	if a == nil || b == nil || a[1] == b[1] {
 		t.Fatalf("nonces %v %v", a, b)
+	}
+}
+
+func TestAdminDismissesUnsentLink(t *testing.T) {
+	h := newHarness(t, true)
+	applyBob(t, h)
+	p, _ := h.flow.Pending(context.Background())
+	id := itoa(p[0].ID)
+	// A pending application cannot be dismissed.
+	rec := h.as(admin, "POST", "/admin/applications/"+id+"/dismiss", url.Values{"csrf": {"tok"}})
+	if rec.Code != 303 || rec.Header().Get("Location") != "/admin?error=not_found" {
+		t.Fatalf("pending: %d %s", rec.Code, rec.Header().Get("Location"))
+	}
+	h.fake.FailSendLink = errors.New("smtp down")
+	h.as(admin, "POST", "/admin/applications/"+id+"/approve", url.Values{"csrf": {"tok"}})
+	body := h.as(admin, "GET", "/admin", nil).Body.String()
+	if !strings.Contains(body, `action="/admin/applications/`+id+`/dismiss"`) ||
+		!strings.Contains(body, "Dismissing stops tracking this application. If the account exists in Pocket ID, deal with it there.") {
+		t.Fatalf("no dismiss beside retry: %s", body)
+	}
+	if rec := h.as(member, "POST", "/admin/applications/"+id+"/dismiss", url.Values{"csrf": {"tok"}}); rec.Code != 403 {
+		t.Fatalf("member: %d", rec.Code)
+	}
+	rec = h.as(admin, "POST", "/admin/applications/"+id+"/dismiss", url.Values{"csrf": {"tok"}})
+	if rec.Code != 303 || rec.Header().Get("Location") != "/admin" {
+		t.Fatalf("%d %s", rec.Code, rec.Header().Get("Location"))
+	}
+	if p, _ := h.flow.Pending(context.Background()); len(p) != 0 {
+		t.Fatal("still listed")
+	}
+	if inv, _ := h.flow.Invites(context.Background(), flow.Member{Sub: "s-alice"}); inv[0].State != "expired" {
+		t.Fatal(inv[0].State)
 	}
 }

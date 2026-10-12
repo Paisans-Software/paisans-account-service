@@ -175,6 +175,30 @@ func (s *Store) CompleteApplication(ctx context.Context, id int64, adminSub stri
 	})
 }
 
+// DismissApplication stops tracking an application whose account may exist
+// but whose sign-in link was never sent: one in link_unsent, or one whose
+// approval claim has gone stale. It deletes the application and expires its
+// invite, which frees the inviter's slot. A pending application is
+// ErrNotFound (it is declined, not dismissed); a live claim is ErrBusy.
+func (s *Store) DismissApplication(ctx context.Context, id int64, adminSub string, now time.Time) error {
+	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+		var inviteID int64
+		err := tx.QueryRow(ctx, `DELETE FROM applications
+			WHERE id=$1 AND (state='link_unsent' OR (state='approving' AND claimed_at < $2))
+			RETURNING invite_id`, id, now.Add(-claimTimeout)).Scan(&inviteID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return notFoundOrBusy(ctx, tx, id)
+		}
+		if err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `UPDATE invites SET state='expired' WHERE id=$1`, inviteID); err != nil {
+			return err
+		}
+		return audit(ctx, tx, adminSub, "application.dismiss", id)
+	})
+}
+
 func (s *Store) DeclineApplication(ctx context.Context, id int64, adminSub string, emailHMAC []byte) error {
 	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
 		var inviteID int64

@@ -375,6 +375,20 @@ func (s *Service) Decline(ctx context.Context, admin Member, id int64) error {
 	return nil
 }
 
+// Dismiss stops tracking an application whose account was created but whose
+// sign-in link was never sent. Anything at the identity provider is left for
+// an admin to deal with there.
+func (s *Service) Dismiss(ctx context.Context, admin Member, id int64) error {
+	if !admin.Admin {
+		return ErrForbidden
+	}
+	if err := s.st.DismissApplication(ctx, id, admin.Sub, s.now()); err != nil {
+		return err
+	}
+	slog.Info("write", "action", "application.dismiss", "application_id", id)
+	return nil
+}
+
 // audit records a provider write that has already happened, so a failure to
 // record it is logged rather than allowed to abort the flow. The subject is the
 // application ID followed by extra, which may only hold further IDs.

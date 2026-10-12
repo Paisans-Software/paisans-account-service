@@ -8,6 +8,8 @@
 <td>{{if .Declines.Count}}{{.Declines.Count}} time(s), last {{.Declines.Last.Format "2 Jan 2006"}}{{else}}never{{end}}</td>
 <td>{{if eq .State "link_unsent"}}<p class="muted">Account created; sign-in link not sent.</p>
 <form class="inline" method="post" action="/admin/applications/{{.ID}}/approve"><input type="hidden" name="csrf" value="{{$.CSRF}}"><button>Retry sending</button></form>
+<form class="inline" method="post" action="/admin/applications/{{.ID}}/dismiss"><input type="hidden" name="csrf" value="{{$.CSRF}}"><button class="secondary">Dismiss</button></form>
+<p class="muted">Dismissing stops tracking this application. If the account exists in Pocket ID, deal with it there.</p>
 {{else if eq .State "approving"}}<p class="muted">Being approved. If this stays for more than ten minutes, approve again.</p>
 <form class="inline" method="post" action="/admin/applications/{{.ID}}/approve"><input type="hidden" name="csrf" value="{{$.CSRF}}"><button>Approve</button></form>
 {{else}}<form class="inline" method="post" action="/admin/applications/{{.ID}}/approve"><input type="hidden" name="csrf" value="{{$.CSRF}}"><button>Approve</button></form>

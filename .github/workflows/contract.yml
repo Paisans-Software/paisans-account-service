@@ -3,6 +3,8 @@ on:
   pull_request:
   push:
     branches: [develop]
+permissions:
+  contents: read
 jobs:
   contract:
     runs-on: ubuntu-latest
@@ -27,20 +29,32 @@ jobs:
           EMAIL_ONE_TIME_ACCESS_AS_ADMIN_ENABLED=true
           EOF
           docker compose up -d
-          for i in $(seq 60); do curl -fs localhost:1411/healthz && break; sleep 2; done
+          healthy=
+          for i in $(seq 60); do curl -fs localhost:1411/healthz && { healthy=1; break; }; sleep 2; done
+          if [ -z "$healthy" ]; then echo "::error::Pocket ID did not become healthy"; exit 1; fi
       - name: Create the default group, then restart Pocket ID with it
         working-directory: contract
         run: |
           id=$(curl -fs -X POST localhost:1411/api/user-groups -H "X-API-Key: $KEY" -H 'Content-Type: application/json' \
-               -d '{"name":"members","friendlyName":"Members"}' | jq -r .id)
+               -d '{"name":"members","friendlyName":"Members"}' | jq -er .id)
           echo "SIGNUP_DEFAULT_USER_GROUP_IDS=[\"$id\"]" >> pocket-id.env
           echo "UI_CONFIG_DISABLED=true" >> pocket-id.env
           echo "CONTRACT_GROUP_ID=$id" >> "$GITHUB_ENV"
           docker compose up -d --force-recreate pocket-id
-          for i in $(seq 60); do curl -fs localhost:1411/healthz && break; sleep 2; done
+          healthy=
+          for i in $(seq 60); do curl -fs localhost:1411/healthz && { healthy=1; break; }; sleep 2; done
+          if [ -z "$healthy" ]; then echo "::error::Pocket ID did not become healthy after the restart"; exit 1; fi
       - name: Contract test
         env:
           CONTRACT_IDP_URL: http://localhost:1411
           CONTRACT_API_KEY: ${{ env.KEY }}
           CONTRACT_MAILPIT_URL: http://localhost:8025
         run: go test -tags contract -run Contract -v ./internal/idp/pocketid/
+      - name: Container logs
+        if: failure()
+        working-directory: contract
+        run: docker compose logs
+      - name: Stop the containers
+        if: always()
+        working-directory: contract
+        run: docker compose down -v

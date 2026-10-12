@@ -7,7 +7,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
@@ -29,25 +31,18 @@ func TestContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if taken, _ := c.UsernameTaken(ctx, name); !taken {
-		t.Fatal("created user not found by search")
+	if taken, err := c.UsernameTaken(ctx, name); err != nil || !taken {
+		t.Fatalf("created user not found by search: %v %v", taken, err)
 	}
-	if taken, _ := c.EmailTaken(ctx, name+"@EXAMPLE.org"); !taken {
-		t.Fatal("email search must ignore case")
+	if taken, err := c.EmailTaken(ctx, name+"@EXAMPLE.org"); err != nil || !taken {
+		t.Fatalf("email search must ignore case: %v %v", taken, err)
 	}
 
 	// The user landed in the signup default group, with no groups sent.
-	req, _ := http.NewRequest(http.MethodGet, base+"/api/users/"+u.ID+"/groups", nil)
-	req.Header.Set("X-API-Key", key)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
 	var groups []struct {
 		ID string `json:"id"`
 	}
-	json.NewDecoder(resp.Body).Decode(&groups)
-	resp.Body.Close()
+	api(t, base, key, http.MethodGet, "/api/users/"+u.ID+"/groups", nil, &groups)
 	if len(groups) != 1 || groups[0].ID != os.Getenv("CONTRACT_GROUP_ID") {
 		t.Fatalf("want exactly the default group, got %+v", groups)
 	}
@@ -79,54 +74,79 @@ func TestContract(t *testing.T) {
 	mailpit := os.Getenv("CONTRACT_MAILPIT_URL")
 	var msgID string
 	for i := 0; i < 20 && msgID == ""; i++ {
-		resp, err := http.Get(mailpit + "/api/v1/search?query=to:" + name + "@example.org")
-		if err == nil {
-			var res struct {
-				Messages []struct {
-					ID string `json:"ID"`
-				} `json:"messages"`
-			}
-			json.NewDecoder(resp.Body).Decode(&res)
-			resp.Body.Close()
-			if len(res.Messages) > 0 {
-				msgID = res.Messages[0].ID
-			}
+		var res struct {
+			Messages []struct {
+				ID string `json:"ID"`
+			} `json:"messages"`
+		}
+		get(t, mailpit+"/api/v1/search?query="+url.QueryEscape("to:"+name+"@example.org"), &res)
+		if len(res.Messages) > 0 {
+			msgID = res.Messages[0].ID
+			break
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
 	if msgID == "" {
 		t.Fatal("no login email reached Mailpit")
 	}
-	resp, err = http.Get(mailpit + "/api/v1/message/" + msgID)
-	if err != nil {
-		t.Fatal(err)
-	}
 	var msg struct {
 		Text string `json:"Text"`
 	}
-	json.NewDecoder(resp.Body).Decode(&msg)
-	resp.Body.Close()
+	get(t, mailpit+"/api/v1/message/"+url.PathEscape(msgID), &msg)
 	if !strings.Contains(msg.Text, "It expires in 7 days.") {
 		t.Fatalf("login email does not carry the 168h lifetime:\n%s", msg.Text)
 	}
 }
 
-// api is the test's own setup call, outside the adapter whose surface is pinned.
+// raw is the client for the test's own calls, outside the adapter whose
+// surface is pinned; its timeout keeps a hung server from hanging the job.
+var raw = &http.Client{Timeout: 10 * time.Second}
+
+// api is the test's own call to Pocket ID's API.
 func api(t *testing.T, base, key, method, path string, body, out any) {
 	t.Helper()
-	b, _ := json.Marshal(body)
-	req, _ := http.NewRequest(method, base+path, bytes.NewReader(b))
+	var rd io.Reader
+	if body != nil {
+		b, err := json.Marshal(body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rd = bytes.NewReader(b)
+	}
+	req, err := http.NewRequest(method, base+path, rd)
+	if err != nil {
+		t.Fatal(err)
+	}
 	req.Header.Set("X-API-Key", key)
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(req)
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	do(t, req, out)
+}
+
+// get fetches a JSON document, as from Mailpit's API.
+func get(t *testing.T, u string, out any) {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodGet, u, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	do(t, req, out)
+}
+
+func do(t *testing.T, req *http.Request, out any) {
+	t.Helper()
+	resp, err := raw.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode/100 != 2 {
-		t.Fatalf("%s %s: status %d", method, path, resp.StatusCode)
+		t.Fatalf("%s %s: status %d", req.Method, req.URL.Path, resp.StatusCode)
 	}
 	if out != nil {
-		json.NewDecoder(resp.Body).Decode(out)
+		if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+			t.Fatalf("%s %s: %v", req.Method, req.URL.Path, err)
+		}
 	}
 }

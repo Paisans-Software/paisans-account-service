@@ -1,0 +1,46 @@
+name: contract
+on:
+  pull_request:
+  push:
+    branches: [develop]
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    env:
+      KEY: contract-static-api-key-0123456789
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Start Pocket ID and Mailpit
+        working-directory: contract
+        run: |
+          cat > pocket-id.env <<EOF
+          APP_URL=http://localhost:1411
+          ENCRYPTION_KEY=$(openssl rand -base64 32)
+          STATIC_API_KEY=$KEY
+          SMTP_HOST=mailpit
+          SMTP_PORT=1025
+          SMTP_TLS=none
+          SMTP_FROM=id@example.org
+          EMAIL_ONE_TIME_ACCESS_AS_ADMIN_ENABLED=true
+          EOF
+          docker compose up -d
+          for i in $(seq 60); do curl -fs localhost:1411/healthz && break; sleep 2; done
+      - name: Create the default group, then restart Pocket ID with it
+        working-directory: contract
+        run: |
+          id=$(curl -fs -X POST localhost:1411/api/user-groups -H "X-API-Key: $KEY" -H 'Content-Type: application/json' \
+               -d '{"name":"members","friendlyName":"Members"}' | jq -r .id)
+          echo "SIGNUP_DEFAULT_USER_GROUP_IDS=[\"$id\"]" >> pocket-id.env
+          echo "UI_CONFIG_DISABLED=true" >> pocket-id.env
+          echo "CONTRACT_GROUP_ID=$id" >> "$GITHUB_ENV"
+          docker compose up -d --force-recreate pocket-id
+          for i in $(seq 60); do curl -fs localhost:1411/healthz && break; sleep 2; done
+      - name: Contract test
+        env:
+          CONTRACT_IDP_URL: http://localhost:1411
+          CONTRACT_API_KEY: ${{ env.KEY }}
+          CONTRACT_MAILPIT_URL: http://localhost:8025
+        run: go test -tags contract -run Contract -v ./internal/idp/pocketid/

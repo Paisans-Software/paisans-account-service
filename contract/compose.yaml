@@ -1,0 +1,11 @@
+services:
+  mailpit:
+    image: axllent/mailpit:v1.27
+    ports: ["8025:8025"]
+  pocket-id:
+    image: ghcr.io/pocket-id/pocket-id:v2.18.0
+    ports: ["1411:1411"]
+    env_file: [pocket-id.env]
+    volumes: ["pid-data:/app/data"]
+volumes:
+  pid-data:

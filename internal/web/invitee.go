@@ -77,11 +77,12 @@ func (s *server) inviteSubmit(w http.ResponseWriter, r *http.Request) {
 	case err != nil:
 		s.fail(w, err)
 	case now:
-		s.Render.page(w, 200, "message.html", view{Title: "Welcome", Data: map[string]string{
-			"Heading": "Welcome", "Body": "Check your email — your sign-in link is on its way."}})
+		idp := s.Render.idp
+		s.Render.page(w, 200, "message.html", view{Title: "Check your email", Data: messageData{
+			Heading: "Check your email", Body: "We've sent you a sign-in link. It expires in 7 days.", Recovery: &idp}})
 	default:
-		s.Render.page(w, 200, "message.html", view{Title: "Thank you", Data: map[string]string{
-			"Heading": "Thank you", "Body": "An admin will review your application, and you will get an email."}})
+		s.Render.page(w, 200, "message.html", view{Title: "Thanks for applying", Data: messageData{
+			Heading: "Thanks for applying", Body: "An admin will review your application. Once you're approved, we'll email you a sign-in link."}})
 	}
 }
 

@@ -102,3 +102,11 @@ func TestEveryPageExecutes(t *testing.T) {
 		}
 	}
 }
+
+func TestRendererNeedsAbsoluteIDPURL(t *testing.T) {
+	for _, u := range []string{"", "id.example.org", "/pocket"} {
+		if _, err := newRenderer("", u); err == nil {
+			t.Errorf("%q accepted", u)
+		}
+	}
+}

@@ -74,8 +74,14 @@ func TestInviteeCSRFBoundToInvite(t *testing.T) {
 func TestSubmitAndReuse(t *testing.T) {
 	h := newHarness(t, true)
 	tok, csrf := h.invite(t)
-	if rec := post(h, "/i/"+tok, form(csrf)); rec.Code != 200 || !strings.Contains(rec.Body.String(), "admin will review") {
-		t.Fatalf("%d %s", rec.Code, rec.Body.String())
+	rec := post(h, "/i/"+tok, form(csrf))
+	body := rec.Body.String()
+	if rec.Code != 200 || !strings.Contains(body, "<h1>Thanks for applying</h1>") ||
+		!strings.Contains(body, "<p>An admin will review your application. Once you&#39;re approved, we&#39;ll email you a sign-in link.</p>") {
+		t.Fatalf("%d %s", rec.Code, body)
+	}
+	if strings.Contains(body, "Link expired") || strings.Contains(body, "<a ") {
+		t.Fatalf("the approval page carries nothing else: %s", body)
 	}
 	if rec := post(h, "/i/"+tok, form(csrf)); rec.Code != 404 {
 		t.Fatalf("second use must be the neutral page: %d", rec.Code)
@@ -170,7 +176,39 @@ func TestRevokedLooksLikeMalformed(t *testing.T) {
 func TestSubmitWithoutApprovalSaysCheckEmail(t *testing.T) {
 	h := newHarness(t, false)
 	tok, csrf := h.invite(t)
-	if rec := post(h, "/i/"+tok, form(csrf)); rec.Code != 200 || !strings.Contains(rec.Body.String(), "Check your email") {
-		t.Fatalf("%d %s", rec.Code, rec.Body.String())
+	rec := post(h, "/i/"+tok, form(csrf))
+	body := rec.Body.String()
+	for _, want := range []string{
+		"<h1>Check your email</h1>",
+		"<p>We&#39;ve sent you a sign-in link. It expires in 7 days.</p>",
+		`<p class="muted">Link expired? Go to <a href="https://id.example.org">id.example.org</a>, choose sign in with an email code, and enter the code from the new email on that same screen.</p>`,
+	} {
+		if rec.Code != 200 || !strings.Contains(body, want) {
+			t.Fatalf("%d: want %s in %s", rec.Code, want, body)
+		}
+	}
+}
+
+// The recovery line names the identity provider from configuration alone.
+func TestRecoveryLinkFollowsConfiguredIDP(t *testing.T) {
+	page := func(idpURL string) string {
+		h := newHarnessIDP(t, false, idpURL)
+		tok, csrf := h.invite(t)
+		rec := post(h, "/i/"+tok, form(csrf))
+		if rec.Code != 200 {
+			t.Fatalf("%d", rec.Code)
+		}
+		return rec.Body.String()
+	}
+	one := page("https://id.one.example")
+	if !strings.Contains(one, `<a href="https://id.one.example">id.one.example</a>`) {
+		t.Fatalf("first IDP missing: %s", one)
+	}
+	two := page("https://login.two.example")
+	if !strings.Contains(two, `<a href="https://login.two.example">login.two.example</a>`) {
+		t.Fatalf("second IDP missing: %s", two)
+	}
+	if strings.Contains(two, "one.example") {
+		t.Fatalf("first IDP leaked into the second page: %s", two)
 	}
 }

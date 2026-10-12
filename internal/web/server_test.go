@@ -27,13 +27,22 @@ type harness struct {
 }
 
 func newHarness(t *testing.T, approval bool) harness {
+	return newHarnessIDP(t, approval, "https://id.example.org")
+}
+
+// newHarnessIDP is newHarness with the identity provider at idpURL, the value
+// New takes from config.Config.IDPURL.
+func newHarnessIDP(t *testing.T, approval bool, idpURL string) harness {
 	st := storetest.New(t)
 	fake := &idptest.Fake{Users: []idp.User{{ID: "r", Username: "root", Email: "root@x.org"}}, Groups: map[string][]string{"admins": {"root"}}}
 	key := make([]byte, 32)
 	f := flow.New(st, fake, &mailtest.Recorder{}, coc.CoC{Version: "v", HTML: "<p>Be kind</p>"}, flow.Settings{
 		Quota: 1, RequireApproval: approval, InviteLifetime: time.Hour, PublicURL: "https://invite.example.org", EmailHashKey: key, AdminGroup: "admins",
 	}, time.Now)
-	r, _ := newRenderer("", "https://id.example.org")
+	r, err := newRenderer("", idpURL)
+	if err != nil {
+		t.Fatal(err)
+	}
 	s := sessions{key: key}
 	return harness{h: NewServer(Options{Flow: f, Sessions: s, Auth: http.NotFoundHandler(), Render: r, Health: st, SessionKey: key}), s: s, fake: fake, flow: f, st: st}
 }

@@ -2,9 +2,11 @@ package web
 
 import (
 	"embed"
+	"errors"
 	"html/template"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 )
@@ -29,10 +31,27 @@ type renderer struct {
 	pages  map[string]*template.Template
 	accent template.CSS
 	logo   string
+	idp    idpLink
+}
+
+// idpLink is the identity provider as a page shows it: the configured
+// INVITE_IDP_URL, and its host as the link text.
+type idpLink struct{ URL, Host string }
+
+// messageData is message.html's data. Recovery, when set, adds the line that
+// sends someone whose link expired to the identity provider.
+type messageData struct {
+	Heading, Body string
+	Recovery      *idpLink
 }
 
 func newRenderer(accent, idpURL string) (*renderer, error) {
-	r := &renderer{pages: map[string]*template.Template{}, logo: idpURL + "/api/application-images/logo"}
+	u, err := url.Parse(idpURL)
+	if err != nil || u.Host == "" {
+		return nil, errors.New("the identity provider URL must be an absolute URL")
+	}
+	r := &renderer{pages: map[string]*template.Template{}, logo: idpURL + "/api/application-images/logo",
+		idp: idpLink{URL: idpURL, Host: u.Host}}
 	// Pocket ID's accent_color is "default" or a CSS colour such as
 	// "oklch(0.63 0.2 15)". Only a value the rule admits is passed through as
 	// trusted CSS; html/template would otherwise defuse the parentheses.

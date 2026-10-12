@@ -1,1 +1,1 @@
-{{define "content"}}<div class="card"><h1>{{.Data.Heading}}</h1><p>{{.Data.Body}}</p></div>{{end}}
+{{define "content"}}<div class="card"><h1>{{.Data.Heading}}</h1><p>{{.Data.Body}}</p>{{with .Data.Recovery}}<p class="muted">Link expired? Go to <a href="{{.URL}}">{{.Host}}</a>, choose sign in with an email code, and enter the code from the new email on that same screen.</p>{{end}}</div>{{end}}

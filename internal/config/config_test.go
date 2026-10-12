@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/base64"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -30,7 +31,7 @@ func TestDefaults(t *testing.T) {
 	}
 	if c.ListenAddr != ":8080" || c.Quota != 3 || !c.RequireApproval ||
 		c.InviteLifetime != 14*24*time.Hour || c.ApplicationWait != 14*24*time.Hour ||
-		c.DeclineRetention != 183*24*time.Hour || c.CoCPath != "/etc/paisans-invite/code-of-conduct.md" {
+		c.DeclineRetention != 183*24*time.Hour || c.LoginLinkDays != 7 || c.CoCPath != "/etc/paisans-invite/code-of-conduct.md" {
 		t.Fatalf("defaults wrong: %+v", c)
 	}
 }
@@ -42,6 +43,9 @@ func TestRefusals(t *testing.T) {
 		"quota too big":      {"INVITE_QUOTA": "101"},
 		"lifetime too long":  {"INVITE_LIFETIME_DAYS": "366"},
 		"retention too long": {"INVITE_DECLINE_RETENTION_DAYS": "3651"},
+		"link days zero":     {"INVITE_LOGIN_LINK_DAYS": "0"},
+		"link days too long": {"INVITE_LOGIN_LINK_DAYS": "32"},
+		"link days word":     {"INVITE_LOGIN_LINK_DAYS": "week"},
 		"bad tls":            {"INVITE_SMTP_TLS": "ssl"},
 		"bad bool":           {"INVITE_REQUIRE_APPROVAL": "yes"},
 		"missing api key":    {"INVITE_IDP_API_KEY": ""},
@@ -59,5 +63,14 @@ func TestErrorsNeverEchoSecrets(t *testing.T) {
 	_, err := Load(env(map[string]string{"INVITE_SESSION_KEY": "not-base64-SECRETVALUE"}))
 	if err == nil || strings.Contains(err.Error(), "SECRETVALUE") {
 		t.Fatalf("error must name the variable, not the value: %v", err)
+	}
+}
+
+func TestLoginLinkDays(t *testing.T) {
+	for _, n := range []string{"1", "31"} {
+		c, err := Load(env(map[string]string{"INVITE_LOGIN_LINK_DAYS": n}))
+		if err != nil || fmt.Sprint(c.LoginLinkDays) != n {
+			t.Fatalf("%s: %d %v", n, c.LoginLinkDays, err)
+		}
 	}
 }

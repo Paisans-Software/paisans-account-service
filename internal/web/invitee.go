@@ -3,6 +3,7 @@ package web
 import (
 	"crypto/subtle"
 	"errors"
+	"fmt"
 	"html/template"
 	"net/http"
 	"strings"
@@ -79,11 +80,19 @@ func (s *server) inviteSubmit(w http.ResponseWriter, r *http.Request) {
 	case now:
 		idp := s.Render.idp
 		s.Render.page(w, 200, "message.html", view{Title: "Check your email", Data: messageData{
-			Heading: "Check your email", Body: "We've sent you a sign-in link. It expires in 7 days.", Recovery: &idp}})
+			Heading: "Check your email", Body: "We've sent you a sign-in link. " + expiresIn(s.Flow.LoginLinkDays()), Recovery: &idp}})
 	default:
 		s.Render.page(w, 200, "message.html", view{Title: "Thanks for applying", Data: messageData{
 			Heading: "Thanks for applying", Body: "An admin will review your application. Once you're approved, we'll email you a sign-in link."}})
 	}
+}
+
+// expiresIn states the sign-in link's lifetime as a sentence.
+func expiresIn(days int) string {
+	if days == 1 {
+		return "It expires in 1 day."
+	}
+	return fmt.Sprintf("It expires in %d days.", days)
 }
 
 // capitalise starts a flow error sentence with a capital; they are ASCII.

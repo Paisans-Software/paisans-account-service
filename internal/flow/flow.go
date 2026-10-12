@@ -45,6 +45,9 @@ type Settings struct {
 	EmailHashKey    []byte
 	// AdminGroup is the provider group whose members are the service's admins.
 	AdminGroup string
+	// LoginLinkDays is the sign-in link's lifetime, the one the provider
+	// client was built with, for the pages that state it.
+	LoginLinkDays int
 }
 
 type Applicant struct {
@@ -74,6 +77,9 @@ func (s *Service) CoC() coc.CoC { return s.coc }
 
 // Quota is the number of invites a non-admin member may have in use.
 func (s *Service) Quota() int { return s.s.Quota }
+
+// LoginLinkDays is how long the provider's sign-in link lasts.
+func (s *Service) LoginLinkDays() int { return s.s.LoginLinkDays }
 
 func TokenHash(token string) ([]byte, bool) {
 	if len(token) != 43 {

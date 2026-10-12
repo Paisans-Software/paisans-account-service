@@ -212,3 +212,16 @@ func TestRecoveryLinkFollowsConfiguredIDP(t *testing.T) {
 		t.Fatalf("first IDP leaked into the second page: %s", two)
 	}
 }
+
+// The page states the configured lifetime, the same value the provider client
+// sends as the link's ttl.
+func TestCheckEmailStatesConfiguredLifetime(t *testing.T) {
+	for days, want := range map[int]string{1: "It expires in 1 day.", 2: "It expires in 2 days.", 31: "It expires in 31 days."} {
+		h := newHarnessWith(t, false, "https://id.example.org", days)
+		tok, csrf := h.invite(t)
+		rec := post(h, "/i/"+tok, form(csrf))
+		if body := rec.Body.String(); rec.Code != 200 || !strings.Contains(body, "<p>We&#39;ve sent you a sign-in link. "+want+"</p>") {
+			t.Errorf("%d days: %d %s", days, rec.Code, body)
+		}
+	}
+}

@@ -17,7 +17,7 @@ import (
 
 var allowedImports = map[string]bool{
 	"bytes": true, "context": true, "encoding/json": true, "errors": true, "fmt": true,
-	"io": true, "log/slog": true, "net/http": true, "net/url": true, "strings": true,
+	"io": true, "log/slog": true, "net/http": true, "net/url": true, "strings": true, "time": true,
 	"github.com/paisans-software/paisans-invite/internal/idp": true,
 }
 
@@ -182,8 +182,8 @@ func TestWriteSurface(t *testing.T) {
 				if !isLoginPath(call.Args[2], paramName(fn, 1)) {
 					t.Fatal(`SendLoginLink path must be "/api/users/" + url.PathEscape(userID) + "/one-time-access-email"`)
 				}
-				if !isLoginLinkLiteral(call.Args[3]) {
-					t.Fatal(`SendLoginLink body must be loginLinkRequest{TTL: "168h"}`)
+				if !isLoginLinkLiteral(call.Args[3], recvIdent(fn), info) {
+					t.Fatalf("SendLoginLink body must be %s", `loginLinkRequest{TTL: fmt.Sprintf("%dh", c.linkTTL/time.Hour)}`)
 				}
 			}
 		}
@@ -203,9 +203,11 @@ func TestWriteSurface(t *testing.T) {
 	}
 }
 
-// isLoginLinkLiteral reports whether e is loginLinkRequest{TTL: "168h"}, with
-// the lifetime written in place as a string literal.
-func isLoginLinkLiteral(e ast.Expr) bool {
+// isLoginLinkLiteral reports whether e is
+// loginLinkRequest{TTL: fmt.Sprintf("%dh", c.linkTTL/time.Hour)}, where c is
+// the method's own receiver: the lifetime is the client's configured one,
+// written in hours, and nothing else.
+func isLoginLinkLiteral(e ast.Expr, recv *ast.Ident, info *types.Info) bool {
 	lit, ok := e.(*ast.CompositeLit)
 	if !ok {
 		return false
@@ -217,8 +219,52 @@ func isLoginLinkLiteral(e ast.Expr) bool {
 	if !ok {
 		return false
 	}
-	key, ok := kv.Key.(*ast.Ident)
-	return ok && key.Name == "TTL" && isStr(kv.Value, "168h")
+	if key, ok := kv.Key.(*ast.Ident); !ok || key.Name != "TTL" {
+		return false
+	}
+	call, ok := kv.Value.(*ast.CallExpr)
+	if !ok || len(call.Args) != 2 || !isPkgFunc(info, call.Fun, "fmt", "Sprintf") || !isStr(call.Args[0], "%dh") {
+		return false
+	}
+	div, ok := call.Args[1].(*ast.BinaryExpr)
+	if !ok || div.Op != token.QUO {
+		return false
+	}
+	field, ok := div.X.(*ast.SelectorExpr)
+	if !ok || field.Sel.Name != "linkTTL" || recv == nil {
+		return false
+	}
+	if v, ok := info.Uses[field.Sel].(*types.Var); !ok || !v.IsField() {
+		return false
+	}
+	if x, ok := field.X.(*ast.Ident); !ok || info.Uses[x] == nil || info.Uses[x] != info.Defs[recv] {
+		return false
+	}
+	hour, ok := div.Y.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	c, ok := info.Uses[hour.Sel].(*types.Const)
+	return ok && c.Pkg() != nil && c.Pkg().Path() == "time" && c.Name() == "Hour"
+}
+
+// isPkgFunc reports whether fun is the function pkg.name, resolved by the
+// type checker.
+func isPkgFunc(info *types.Info, fun ast.Expr, pkg, name string) bool {
+	sel, ok := fun.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	f, ok := info.Uses[sel.Sel].(*types.Func)
+	return ok && f.Pkg() != nil && f.Pkg().Path() == pkg && f.Name() == name
+}
+
+// recvIdent is the name a method gives its receiver, or nil.
+func recvIdent(fn *ast.FuncDecl) *ast.Ident {
+	if fn.Recv == nil || len(fn.Recv.List) != 1 || len(fn.Recv.List[0].Names) != 1 {
+		return nil
+	}
+	return fn.Recv.List[0].Names[0]
 }
 
 // checkHTTPUse resolves id through the type checker and judges it if it is
@@ -359,11 +405,11 @@ func checkDoBody(t *testing.T, fset *token.FileSet, info *types.Info, fn *ast.Fu
 }
 
 // checkPinnedFieldAssign fails on any assignment to a field named
-// EmailVerified or TTL; the only approved settings are the literals in
-// CreateUser and SendLoginLink.
+// EmailVerified, TTL or linkTTL; the only approved settings are the literals
+// in CreateUser, SendLoginLink and New.
 func checkPinnedFieldAssign(t *testing.T, fset *token.FileSet, info *types.Info, lhs ast.Expr) {
 	if sel, ok := lhs.(*ast.SelectorExpr); ok {
-		if v, ok := info.Uses[sel.Sel].(*types.Var); ok && v.IsField() && (v.Name() == "EmailVerified" || v.Name() == "TTL") {
+		if v, ok := info.Uses[sel.Sel].(*types.Var); ok && v.IsField() && (v.Name() == "EmailVerified" || v.Name() == "TTL" || v.Name() == "linkTTL") {
 			t.Errorf("%s: %s assigned outside its approved literal", fset.Position(lhs.Pos()), v.Name())
 		}
 	}

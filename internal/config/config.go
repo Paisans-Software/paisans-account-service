@@ -32,8 +32,11 @@ type Config struct {
 	RequireApproval                            bool
 	InviteLifetime, ApplicationWait            time.Duration
 	DeclineRetention                           time.Duration
-	CoCPath                                    string
-	TrustForwarded                             bool
+	// LoginLinkDays is how long the identity provider's sign-in link lasts.
+	// Pocket ID accepts at most 744h, which is 31 days.
+	LoginLinkDays  int
+	CoCPath        string
+	TrustForwarded bool
 }
 
 func Load(getenv func(string) string) (Config, error) {
@@ -102,6 +105,7 @@ func Load(getenv func(string) string) (Config, error) {
 		InviteLifetime:   days(intIn("INVITE_LIFETIME_DAYS", "14", 1, 365)),
 		ApplicationWait:  days(intIn("INVITE_APPLICATION_WAIT_DAYS", "14", 1, 365)),
 		DeclineRetention: days(intIn("INVITE_DECLINE_RETENTION_DAYS", "183", 1, 3650)),
+		LoginLinkDays:    intIn("INVITE_LOGIN_LINK_DAYS", "7", 1, 31),
 		CoCPath:          opt("INVITE_COC_PATH", "/etc/paisans-invite/code-of-conduct.md"),
 		TrustForwarded:   boolean("INVITE_TRUST_FORWARDED", "false"),
 	}

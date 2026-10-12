@@ -10,9 +10,12 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/paisans-software/paisans-invite/internal/idp"
 )
+
+const week = 7 * 24 * time.Hour
 
 type call struct {
 	Method, Path, Query, Key, Raw string
@@ -60,7 +63,7 @@ func fakePaged(t *testing.T, pages ...[]map[string]any) (*Client, *[]call) {
 		}
 	}))
 	t.Cleanup(srv.Close)
-	return New(srv.URL, "KEY", srv.Client()), &calls
+	return New(srv.URL, "KEY", srv.Client(), week), &calls
 }
 
 func TestUsernameTakenCaseInsensitive(t *testing.T) {
@@ -148,6 +151,20 @@ func TestSendLoginLink(t *testing.T) {
 	}
 }
 
+// The link's lifetime is the client's configured one, in whole hours.
+func TestSendLoginLinkUsesConfiguredLifetime(t *testing.T) {
+	for days, want := range map[int]string{1: `{"ttl":"24h"}`, 14: `{"ttl":"336h"}`, 31: `{"ttl":"744h"}`} {
+		c, calls := fake(t, nil)
+		c.linkTTL = time.Duration(days) * 24 * time.Hour
+		if err := c.SendLoginLink(context.Background(), "new-id"); err != nil {
+			t.Fatal(err)
+		}
+		if got := (*calls)[0].Raw; got != want {
+			t.Errorf("%d days: got %s, want %s", days, got, want)
+		}
+	}
+}
+
 // groupServer serves Pocket ID's group listing (a case-sensitive substring
 // search, one group per page) and each group with its users.
 func groupServer(t *testing.T, groups []map[string]any) (*Client, *[]call) {
@@ -183,7 +200,7 @@ func groupServer(t *testing.T, groups []map[string]any) (*Client, *[]call) {
 		w.WriteHeader(404)
 	}))
 	t.Cleanup(srv.Close)
-	return New(srv.URL, "KEY", srv.Client()), &calls
+	return New(srv.URL, "KEY", srv.Client(), week), &calls
 }
 
 func TestAdminGroupEmails(t *testing.T) {
@@ -218,7 +235,7 @@ func TestErrorsDoNotEchoBodies(t *testing.T) {
 		io.WriteString(w, "SECRET-IN-BODY")
 	}))
 	defer srv.Close()
-	_, err := New(srv.URL, "KEY", srv.Client()).CreateUser(context.Background(), idp.NewUser{Username: "x", Email: "x@x.org"})
+	_, err := New(srv.URL, "KEY", srv.Client(), week).CreateUser(context.Background(), idp.NewUser{Username: "x", Email: "x@x.org"})
 	if err == nil || strings.Contains(err.Error(), "SECRET-IN-BODY") || strings.Contains(err.Error(), "KEY") {
 		t.Fatalf("error must carry status and path only: %v", err)
 	}
@@ -228,7 +245,7 @@ func TestTransportErrorsDoNotEchoQuery(t *testing.T) {
 	srv := httptest.NewServer(http.NotFoundHandler())
 	base := srv.URL
 	srv.Close()
-	c := New(base, "KEY", nil)
+	c := New(base, "KEY", nil, week)
 	check := func(err error) {
 		t.Helper()
 		if err == nil {
@@ -243,7 +260,7 @@ func TestTransportErrorsDoNotEchoQuery(t *testing.T) {
 	_, err := c.EmailTaken(context.Background(), "secret@example.org")
 	check(err)
 	check(c.do(context.Background(), http.MethodGet, "/api/users?search=secret%40example.org", nil, nil))
-	check(New("://bad", "KEY", nil).do(context.Background(), http.MethodGet, "/api/users?search=secret%40example.org", nil, nil))
+	check(New("://bad", "KEY", nil, week).do(context.Background(), http.MethodGet, "/api/users?search=secret%40example.org", nil, nil))
 }
 
 func TestRedirectIsAnError(t *testing.T) {
@@ -256,7 +273,7 @@ func TestRedirectIsAnError(t *testing.T) {
 		http.Redirect(w, r, "/elsewhere", http.StatusFound)
 	}))
 	defer srv.Close()
-	if _, err := New(srv.URL, "KEY", srv.Client()).EmailTaken(context.Background(), "a@x.org"); err == nil {
+	if _, err := New(srv.URL, "KEY", srv.Client(), week).EmailTaken(context.Background(), "a@x.org"); err == nil {
 		t.Fatal("a 302 must be an error")
 	}
 	if followed {

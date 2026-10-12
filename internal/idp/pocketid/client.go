@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/paisans-software/paisans-invite/internal/idp"
 )
@@ -20,6 +21,9 @@ import (
 type Client struct {
 	base, key string
 	hc        *http.Client
+	// linkTTL is the sign-in link's lifetime, sent in whole hours. Pocket ID
+	// accepts at most 744h; config.Load holds it to 1 to 31 days.
+	linkTTL time.Duration
 }
 
 var _ idp.Provider = (*Client)(nil)
@@ -28,14 +32,15 @@ var _ idp.Provider = (*Client)(nil)
 const maxPages = 100
 
 // New copies hc so that a redirect is an error: the API key header must never
-// follow a 3xx to another place.
-func New(baseURL, apiKey string, hc *http.Client) *Client {
+// follow a 3xx to another place. linkTTL is the lifetime of every sign-in link
+// the client sends.
+func New(baseURL, apiKey string, hc *http.Client, linkTTL time.Duration) *Client {
 	var cp http.Client
 	if hc != nil {
 		cp = *hc
 	}
 	cp.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	return &Client{base: strings.TrimRight(baseURL, "/"), key: apiKey, hc: &cp}
+	return &Client{base: strings.TrimRight(baseURL, "/"), key: apiKey, hc: &cp, linkTTL: linkTTL}
 }
 
 // withoutURL drops the *url.Error wrapper, whose message carries the whole
@@ -73,8 +78,9 @@ type createUserRequest struct {
 }
 
 // loginLinkRequest is the whole body of the login-link write. Pocket ID's
-// default lifetime is 15 minutes; the link is sent for 168h, which its email
-// reads as "7 days". Its one field is pinned by TestWriteSurface.
+// default lifetime is 15 minutes; the link is sent for the configured number of
+// days in hours, which its email reads back as days ("168h" is "7 days"). Its
+// one field, and the expression that fills it, are pinned by TestWriteSurface.
 type loginLinkRequest struct {
 	TTL string `json:"ttl"`
 }
@@ -236,7 +242,7 @@ func (c *Client) CreateUser(ctx context.Context, u idp.NewUser) (idp.User, error
 }
 
 func (c *Client) SendLoginLink(ctx context.Context, userID string) error {
-	if err := c.do(ctx, http.MethodPost, "/api/users/"+url.PathEscape(userID)+"/one-time-access-email", loginLinkRequest{TTL: "168h"}, nil); err != nil {
+	if err := c.do(ctx, http.MethodPost, "/api/users/"+url.PathEscape(userID)+"/one-time-access-email", loginLinkRequest{TTL: fmt.Sprintf("%dh", c.linkTTL/time.Hour)}, nil); err != nil {
 		return err
 	}
 	slog.Info("identity provider write", "action", "user.login_link", "user_id", userID)

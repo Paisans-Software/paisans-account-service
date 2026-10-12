@@ -18,7 +18,7 @@ import (
 
 func TestContract(t *testing.T) {
 	base, key := os.Getenv("CONTRACT_IDP_URL"), os.Getenv("CONTRACT_API_KEY")
-	c := New(base, key, &http.Client{Timeout: 10 * time.Second})
+	c := New(base, key, &http.Client{Timeout: 10 * time.Second}, 7*24*time.Hour)
 	ctx := context.Background()
 	name := fmt.Sprintf("contract%d", time.Now().UnixNano()%1e9)
 

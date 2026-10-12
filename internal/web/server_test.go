@@ -33,11 +33,18 @@ func newHarness(t *testing.T, approval bool) harness {
 // newHarnessIDP is newHarness with the identity provider at idpURL, the value
 // New takes from config.Config.IDPURL.
 func newHarnessIDP(t *testing.T, approval bool, idpURL string) harness {
+	return newHarnessWith(t, approval, idpURL, 7)
+}
+
+// newHarnessWith also takes the sign-in link's lifetime in days, the value
+// New takes from config.Config.LoginLinkDays.
+func newHarnessWith(t *testing.T, approval bool, idpURL string, linkDays int) harness {
 	st := storetest.New(t)
 	fake := &idptest.Fake{Users: []idp.User{{ID: "r", Username: "root", Email: "root@x.org"}}, Groups: map[string][]string{"admins": {"root"}}}
 	key := make([]byte, 32)
 	f := flow.New(st, fake, &mailtest.Recorder{}, coc.CoC{Version: "v", HTML: "<p>Be kind</p>"}, flow.Settings{
 		Quota: 1, RequireApproval: approval, InviteLifetime: time.Hour, PublicURL: "https://invite.example.org", EmailHashKey: key, AdminGroup: "admins",
+		LoginLinkDays: linkDays,
 	}, time.Now)
 	r, err := newRenderer("", idpURL)
 	if err != nil {

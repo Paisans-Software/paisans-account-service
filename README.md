@@ -20,6 +20,7 @@ paisans-invite is a small Go service where members make invite links and invitee
 | `INVITE_SMTP_TLS` | `none`, `starttls` or `tls` |
 | `INVITE_ACCENT_COLOR` | a CSS colour, or empty for the default |
 | `INVITE_QUOTA`, `INVITE_REQUIRE_APPROVAL`, `INVITE_LIFETIME_DAYS`, `INVITE_APPLICATION_WAIT_DAYS`, `INVITE_DECLINE_RETENTION_DAYS` | the settings |
+| `INVITE_LOGIN_LINK_DAYS` | how long the sign-in link Pocket ID sends lasts, 1 to 31 days, default 7 |
 | `INVITE_COC_PATH` | path to the mounted code of conduct, default `/etc/paisans-invite/code-of-conduct.md` |
 | `INVITE_TRUST_FORWARDED` | `true` behind the gateway's Caddy: client address is the rightmost `X-Forwarded-For` entry |
 

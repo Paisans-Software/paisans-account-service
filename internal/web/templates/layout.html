@@ -1,0 +1,13 @@
+{{define "layout"}}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.Title}}</title>
+<link rel="stylesheet" href="/static/style.css">
+{{if .Accent}}<style>:root{--accent-color: {{.Accent}};}</style>{{end}}
+</head>
+<body><main>
+<header><img src="{{.LogoURL}}" alt=""><span>{{if .Session}}Signed in as {{.Session.Username}}{{end}}</span></header>
+{{if .Error}}<div class="alert error" role="alert">{{.Error}}</div>{{end}}
+{{template "content" .}}
+</main></body></html>{{end}}

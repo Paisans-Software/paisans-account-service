@@ -1,0 +1,15 @@
+{{define "content"}}
+<div class="card"><h1>You have been invited</h1>
+<p>{{.Data.Inviter}} invited you. Please read the code of conduct first.</p>
+<div class="coc">{{.Data.CoC}}</div>
+<form method="post">
+<input type="hidden" name="csrf" value="{{.CSRF}}">
+<div class="check"><input type="checkbox" id="agree" name="agree" value="yes" required><label for="agree" style="margin:0">I have read the code of conduct and agree to it.</label></div>
+<label for="username">Username</label><input type="text" id="username" name="username" value="{{.Data.Username}}" maxlength="50" required autocomplete="username">
+<p class="muted">Other members see this, and it cannot be changed later. Letters, numbers, dots, underscores and hyphens.</p>
+<label for="display_name">Display name</label><input type="text" id="display_name" name="display_name" value="{{.Data.DisplayName}}" maxlength="100" required autocomplete="name">
+<label for="email">Email</label><input type="email" id="email" name="email" value="{{.Data.Email}}" required autocomplete="email">
+<p class="muted">Your sign-in link will be sent here.</p>
+<p><button>Join</button></p>
+</form></div>
+{{end}}

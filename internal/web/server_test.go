@@ -28,10 +28,10 @@ type harness struct {
 
 func newHarness(t *testing.T, approval bool) harness {
 	st := storetest.New(t)
-	fake := &idptest.Fake{Users: []idp.User{{ID: "r", Username: "root", Email: "root@x.org", IsAdmin: true}}}
+	fake := &idptest.Fake{Users: []idp.User{{ID: "r", Username: "root", Email: "root@x.org"}}, Groups: map[string][]string{"admins": {"root"}}}
 	key := make([]byte, 32)
 	f := flow.New(st, fake, &mailtest.Recorder{}, coc.CoC{Version: "v", HTML: "<p>Be kind</p>"}, flow.Settings{
-		Quota: 1, RequireApproval: approval, InviteLifetime: time.Hour, PublicURL: "https://invite.example.org", EmailHashKey: key,
+		Quota: 1, RequireApproval: approval, InviteLifetime: time.Hour, PublicURL: "https://invite.example.org", EmailHashKey: key, AdminGroup: "admins",
 	}, time.Now)
 	r, _ := newRenderer("", "https://id.example.org")
 	s := sessions{key: key}

@@ -22,11 +22,11 @@ var root = flow.Member{Sub: "s-root", Username: "root", Admin: true}
 
 func setup(t *testing.T, approval bool) (*flow.Service, *idptest.Fake, *mailtest.Recorder) {
 	st := storetest.New(t)
-	f := &idptest.Fake{Users: []idp.User{{ID: "r", Username: "root", Email: "root@x.org", IsAdmin: true}}}
+	f := &idptest.Fake{Users: []idp.User{{ID: "r", Username: "root", Email: "root@x.org"}}, Groups: map[string][]string{"admins": {"root"}}}
 	m := &mailtest.Recorder{}
 	s := flow.New(st, f, m, coc.CoC{Version: "v1"}, flow.Settings{
 		Quota: 2, RequireApproval: approval, InviteLifetime: 14 * 24 * time.Hour,
-		PublicURL: "https://invite.example.org", EmailHashKey: make([]byte, 32),
+		PublicURL: "https://invite.example.org", EmailHashKey: make([]byte, 32), AdminGroup: "admins",
 	}, time.Now)
 	return s, f, m
 }
@@ -239,5 +239,18 @@ func TestQuotaReportsSetting(t *testing.T) {
 	s, _, _ := setup(t, true)
 	if s.Quota() != 2 {
 		t.Fatal(s.Quota())
+	}
+}
+
+func TestWaitingNoticeGoesToAdminGroupOnly(t *testing.T) {
+	s, f, m := setup(t, true)
+	f.Users = append(f.Users, idp.User{ID: "a", Username: "alice", Email: "alice@x.org"})
+	f.Groups["members"] = []string{"alice"}
+	link, _, _ := s.CreateInvite(ctx, alice)
+	if _, err := s.Apply(ctx, token(t, link), bob()); err != nil {
+		t.Fatal(err)
+	}
+	if len(m.To("root@x.org")) != 1 || len(m.To("alice@x.org")) != 0 {
+		t.Fatal("only the admin group is told an application is waiting")
 	}
 }

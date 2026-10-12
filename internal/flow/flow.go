@@ -43,6 +43,8 @@ type Settings struct {
 	InviteLifetime  time.Duration
 	PublicURL       string
 	EmailHashKey    []byte
+	// AdminGroup is the provider group whose members are the service's admins.
+	AdminGroup string
 }
 
 type Applicant struct {
@@ -206,7 +208,7 @@ func (s *Service) Apply(ctx context.Context, token string, in Applicant) (bool, 
 }
 
 func (s *Service) notifyAdmins(ctx context.Context) {
-	admins, err := s.p.AdminEmails(ctx)
+	admins, err := s.p.AdminGroupEmails(ctx, s.s.AdminGroup)
 	if err == nil && len(admins) > 0 {
 		err = s.m.Send(ctx, admins, "An invite application is waiting",
 			"Someone has accepted an invite and is waiting for approval.\n\n"+s.s.PublicURL+"/admin\n")

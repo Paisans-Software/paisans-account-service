@@ -97,7 +97,7 @@ func TestWriteSurface(t *testing.T) {
 
 	writes := map[string]int{}
 	posts := map[string]int{}
-	exported := map[string]bool{"UsernameTaken": true, "EmailTaken": true, "FindUser": true, "AdminEmails": true, "CreateUser": true, "SendLoginLink": true}
+	exported := map[string]bool{"UsernameTaken": true, "EmailTaken": true, "FindUser": true, "AdminGroupEmails": true, "CreateUser": true, "SendLoginLink": true}
 	for _, file := range parsed {
 		for _, decl := range file.Decls {
 			owner, inDo := "<package>", false

@@ -3,6 +3,7 @@
 package pocketid
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -50,6 +51,24 @@ func TestContract(t *testing.T) {
 		t.Fatalf("want exactly the default group, got %+v", groups)
 	}
 
+	// The admin notice reads the admin group's members, by exact group name:
+	// "superadmins" also matches Pocket ID's substring search and must not count.
+	other, err := c.CreateUser(ctx, idp.NewUser{Username: name + "x", Email: name + "x@example.org", DisplayName: "Other"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for group, member := range map[string]string{"admins": u.ID, "superadmins": other.ID} {
+		var g struct {
+			ID string `json:"id"`
+		}
+		api(t, base, key, http.MethodPost, "/api/user-groups", map[string]any{"name": group, "friendlyName": group}, &g)
+		api(t, base, key, http.MethodPut, "/api/user-groups/"+g.ID+"/users", map[string]any{"userIds": []string{member}}, nil)
+	}
+	admins, err := c.AdminGroupEmails(ctx, "admins")
+	if err != nil || len(admins) != 1 || admins[0] != name+"@example.org" {
+		t.Fatalf("admin group emails: %v %v", admins, err)
+	}
+
 	if err := c.SendLoginLink(ctx, u.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -69,5 +88,25 @@ func TestContract(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("no login email reached Mailpit")
+	}
+}
+
+// api is the test's own setup call, outside the adapter whose surface is pinned.
+func api(t *testing.T, base, key, method, path string, body, out any) {
+	t.Helper()
+	b, _ := json.Marshal(body)
+	req, _ := http.NewRequest(method, base+path, bytes.NewReader(b))
+	req.Header.Set("X-API-Key", key)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		t.Fatalf("%s %s: status %d", method, path, resp.StatusCode)
+	}
+	if out != nil {
+		json.NewDecoder(resp.Body).Decode(out)
 	}
 }

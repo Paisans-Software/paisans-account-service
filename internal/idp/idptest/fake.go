@@ -13,8 +13,10 @@ import (
 var _ idp.Provider = (*Fake)(nil)
 
 type Fake struct {
-	mu                       sync.Mutex
-	Users                    []idp.User
+	mu    sync.Mutex
+	Users []idp.User
+	// Groups maps a group name to the usernames of its members.
+	Groups                   map[string][]string
 	FailCreate, FailSendLink error
 	// FailLookup makes every read fail, as an unreachable provider would.
 	FailLookup         error
@@ -54,16 +56,18 @@ func (f *Fake) FindUser(_ context.Context, n string) (idp.User, bool, error) {
 	return idp.User{}, false, nil
 }
 
-func (f *Fake) AdminEmails(context.Context) ([]string, error) {
+func (f *Fake) AdminGroupEmails(_ context.Context, group string) ([]string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.FailLookup != nil {
 		return nil, f.FailLookup
 	}
 	var out []string
-	for _, u := range f.Users {
-		if u.IsAdmin && u.Email != "" {
-			out = append(out, u.Email)
+	for _, name := range f.Groups[group] {
+		for _, u := range f.Users {
+			if u.Username == name && u.Email != "" {
+				out = append(out, u.Email)
+			}
 		}
 	}
 	return out, nil

@@ -52,7 +52,7 @@ type userDTO struct {
 	ID       string  `json:"id"`
 	Username string  `json:"username"`
 	Email    *string `json:"email"`
-	IsAdmin  bool    `json:"isAdmin"`
+	Disabled bool    `json:"disabled"`
 }
 
 func (u userDTO) user() idp.User {
@@ -60,7 +60,7 @@ func (u userDTO) user() idp.User {
 	if u.Email != nil {
 		e = *u.Email
 	}
-	return idp.User{ID: u.ID, Username: u.Username, Email: e, IsAdmin: u.IsAdmin}
+	return idp.User{ID: u.ID, Username: u.Username, Email: e}
 }
 
 // createUserRequest is the whole body of the one user-creating write. Its
@@ -166,18 +166,56 @@ func (c *Client) EmailTaken(ctx context.Context, email string) (bool, error) {
 	return false, nil
 }
 
-func (c *Client) AdminEmails(ctx context.Context) ([]string, error) {
-	users, err := c.listUsers(ctx)
+// AdminGroupEmails returns the email addresses of the members of the group
+// whose name (the value in the groups claim) is exactly group. Pocket ID's
+// group search is a substring match, so the listing is filtered here.
+func (c *Client) AdminGroupEmails(ctx context.Context, group string) ([]string, error) {
+	id, err := c.groupID(ctx, group)
 	if err != nil {
 		return nil, err
 	}
+	var g struct {
+		Users []userDTO `json:"users"`
+	}
+	if err := c.do(ctx, http.MethodGet, "/api/user-groups/"+url.PathEscape(id), nil, &g); err != nil {
+		return nil, err
+	}
 	var out []string
-	for _, u := range users {
-		if u.IsAdmin && u.Email != "" {
-			out = append(out, u.Email)
+	for _, u := range g.Users {
+		if u.Email != nil && *u.Email != "" && !u.Disabled {
+			out = append(out, *u.Email)
 		}
 	}
 	return out, nil
+}
+
+func (c *Client) groupID(ctx context.Context, name string) (string, error) {
+	for page := 1; ; page++ {
+		if page > maxPages {
+			return "", fmt.Errorf("identity provider GET /api/user-groups: more than %d pages", maxPages)
+		}
+		q := url.Values{"search": {name}, "pagination[page]": {fmt.Sprint(page)}, "pagination[limit]": {"100"}}
+		var res struct {
+			Data []struct {
+				ID   string `json:"id"`
+				Name string `json:"name"`
+			} `json:"data"`
+			Pagination struct {
+				TotalPages int `json:"totalPages"`
+			} `json:"pagination"`
+		}
+		if err := c.do(ctx, http.MethodGet, "/api/user-groups?"+q.Encode(), nil, &res); err != nil {
+			return "", err
+		}
+		for _, g := range res.Data {
+			if g.Name == name {
+				return g.ID, nil
+			}
+		}
+		if page >= res.Pagination.TotalPages {
+			return "", fmt.Errorf("identity provider: no group named %q", name)
+		}
+	}
 }
 
 func (c *Client) CreateUser(ctx context.Context, u idp.NewUser) (idp.User, error) {

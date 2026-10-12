@@ -86,7 +86,7 @@ func run() error {
 	provider := pocketid.New(cfg.IDPURL, cfg.IDPAPIKey, &http.Client{Timeout: 15 * time.Second})
 	f := flow.New(st, provider, sender, c, flow.Settings{
 		Quota: cfg.Quota, RequireApproval: cfg.RequireApproval, InviteLifetime: cfg.InviteLifetime,
-		PublicURL: cfg.PublicURL, EmailHashKey: cfg.EmailHashKey,
+		PublicURL: cfg.PublicURL, EmailHashKey: cfg.EmailHashKey, AdminGroup: cfg.AdminGroup,
 	}, time.Now)
 	handler, err := web.New(ctx, cfg, f, st)
 	if err != nil {

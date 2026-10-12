@@ -76,9 +76,8 @@ func TestListingAsksForLargePages(t *testing.T) {
 	c, calls := fake(t, []map[string]any{{"id": "1", "username": "a", "email": "a@x.org"}})
 	c.UsernameTaken(context.Background(), "a")
 	c.EmailTaken(context.Background(), "a@x.org")
-	c.AdminEmails(context.Background())
-	if len(*calls) != 3 {
-		t.Fatalf("want 3 requests, got %d", len(*calls))
+	if len(*calls) != 2 {
+		t.Fatalf("want 2 requests, got %d", len(*calls))
 	}
 	for _, got := range *calls {
 		q, err := url.ParseQuery(got.Query)
@@ -145,15 +144,67 @@ func TestSendLoginLink(t *testing.T) {
 	}
 }
 
-func TestAdminEmails(t *testing.T) {
-	c, _ := fake(t, []map[string]any{
-		{"id": "1", "username": "a", "email": "a@x.org", "isAdmin": true},
-		{"id": "2", "username": "b", "email": "b@x.org", "isAdmin": false},
-		{"id": "3", "username": "c", "isAdmin": true},
+// groupServer serves Pocket ID's group listing (a case-sensitive substring
+// search, one group per page) and each group with its users.
+func groupServer(t *testing.T, groups []map[string]any) (*Client, *[]call) {
+	var calls []call
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls = append(calls, call{Method: r.Method, Path: r.URL.Path, Query: r.URL.RawQuery})
+		if r.Method != "GET" {
+			w.WriteHeader(405)
+			return
+		}
+		var hits []map[string]any
+		for _, g := range groups {
+			if strings.Contains(g["name"].(string), r.URL.Query().Get("search")) {
+				hits = append(hits, g)
+			}
+		}
+		if r.URL.Path == "/api/user-groups" {
+			page := 1
+			fmt.Sscan(r.URL.Query().Get("pagination[page]"), &page)
+			var data []map[string]any
+			if page >= 1 && page <= len(hits) {
+				data = []map[string]any{{"id": hits[page-1]["id"], "name": hits[page-1]["name"]}}
+			}
+			json.NewEncoder(w).Encode(map[string]any{"data": data, "pagination": map[string]any{"totalPages": len(hits), "currentPage": page}})
+			return
+		}
+		for _, g := range groups {
+			if r.URL.Path == "/api/user-groups/"+g["id"].(string) {
+				json.NewEncoder(w).Encode(g)
+				return
+			}
+		}
+		w.WriteHeader(404)
+	}))
+	t.Cleanup(srv.Close)
+	return New(srv.URL, "KEY", srv.Client()), &calls
+}
+
+func TestAdminGroupEmails(t *testing.T) {
+	c, calls := groupServer(t, []map[string]any{
+		{"id": "g1", "name": "superadmins", "users": []map[string]any{{"id": "9", "username": "z", "email": "z@x.org"}}},
+		{"id": "g2", "name": "admins", "users": []map[string]any{
+			{"id": "1", "username": "a", "email": "a@x.org"},
+			{"id": "2", "username": "b"},
+			{"id": "3", "username": "c", "email": "c@x.org", "disabled": true},
+		}},
 	})
-	got, err := c.AdminEmails(context.Background())
+	got, err := c.AdminGroupEmails(context.Background(), "admins")
 	if err != nil || len(got) != 1 || got[0] != "a@x.org" {
 		t.Fatalf("%v %v", got, err)
+	}
+	for _, cl := range *calls {
+		if cl.Method != "GET" {
+			t.Fatalf("a read made a %s", cl.Method)
+		}
+	}
+	if last := (*calls)[len(*calls)-1]; last.Path != "/api/user-groups/g2" {
+		t.Fatalf("read the wrong group: %s", last.Path)
+	}
+	if _, err := c.AdminGroupEmails(context.Background(), "nobody"); err == nil {
+		t.Fatal("a missing group must be an error")
 	}
 }
 
@@ -212,7 +263,7 @@ func TestRedirectIsAnError(t *testing.T) {
 func TestListingIsCapped(t *testing.T) {
 	pages := make([][]map[string]any, maxPages+1)
 	c, calls := fakePaged(t, pages...)
-	if _, err := c.AdminEmails(context.Background()); err == nil {
+	if _, err := c.UsernameTaken(context.Background(), "a"); err == nil {
 		t.Fatal("a listing past the page cap must be an error")
 	}
 	if len(*calls) != maxPages {

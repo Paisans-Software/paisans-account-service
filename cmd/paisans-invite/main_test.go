@@ -36,7 +36,11 @@ func TestHealthcheck(t *testing.T) {
 			t.Errorf("%s: got %d want %d", tc.name, got, tc.want)
 		}
 	}
-	l, _ := net.Listen("tcp", "127.0.0.1:0")
+	// A port that was just free and is now closed: nothing listens there.
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, port, _ := net.SplitHostPort(l.Addr().String())
 	l.Close()
 	if got := healthcheck(":" + port); got != 1 {

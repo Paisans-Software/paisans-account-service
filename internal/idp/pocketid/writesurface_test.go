@@ -46,8 +46,10 @@ func recvName(f *types.Func) string {
 	return "?"
 }
 
-// The service is approved to make exactly two writes at the identity
-// provider. This test is type-checked, so a shadowed name or a look-alike
+// The service is approved to make exactly three writes at the identity
+// provider: create a user, send a sign-in link, and update a user, where the
+// update sends every field back as read and only SetDisabled, SetEmail and
+// SetName may change a field, each its own. This test is type-checked, so a shadowed name or a look-alike
 // function cannot stand in for net/http. It fails on a third write, on a write
 // moved to another function, on any other way of building or sending a request,
 // on an import that could open a connection by another route, on a changed
@@ -97,7 +99,9 @@ func TestWriteSurface(t *testing.T) {
 
 	writes := map[string]int{}
 	posts := map[string]int{}
-	exported := map[string]bool{"UsernameTaken": true, "EmailTaken": true, "FindUser": true, "AdminGroupEmails": true, "CreateUser": true, "SendLoginLink": true}
+	exported := map[string]bool{"UsernameTaken": true, "EmailTaken": true, "FindUser": true, "AdminGroupEmails": true, "CreateUser": true, "SendLoginLink": true,
+		"ListUsers": true, "GetUser": true, "SetDisabled": true, "SetEmail": true, "SetName": true}
+	puts := map[string]int{}
 	for _, file := range parsed {
 		for _, decl := range file.Decls {
 			owner, inDo := "<package>", false
@@ -130,17 +134,21 @@ func TestWriteSurface(t *testing.T) {
 						callFuns[sel.Sel] = true
 					}
 					if isPkgDo(info, x.Fun, pkg) {
-						checkDoCall(t, fset, info, x, owner, posts)
+						checkDoCall(t, fset, info, x, owner, posts, puts)
 					}
 				case *ast.AssignStmt:
-					for _, l := range x.Lhs {
-						checkPinnedFieldAssign(t, fset, info, l)
+					for i, l := range x.Lhs {
+						var rhs ast.Expr
+						if len(x.Lhs) == len(x.Rhs) {
+							rhs = x.Rhs[i]
+						}
+						checkPinnedFieldAssign(t, fset, info, l, owner, rhs, x.Tok == token.ASSIGN)
 					}
 				case *ast.IncDecStmt:
-					checkPinnedFieldAssign(t, fset, info, x.X)
+					checkPinnedFieldAssign(t, fset, info, x.X, owner, nil, false)
 				case *ast.UnaryExpr:
 					if x.Op == token.AND {
-						checkPinnedFieldAssign(t, fset, info, x.X)
+						checkPinnedFieldAssign(t, fset, info, x.X, owner, nil, false)
 					}
 				}
 				return true
@@ -156,7 +164,10 @@ func TestWriteSurface(t *testing.T) {
 	if !reflect.DeepEqual(posts, map[string]int{"CreateUser": 1, "SendLoginLink": 1}) {
 		t.Errorf("c.do(http.MethodPost) calls: got %v", posts)
 	}
-	want := map[string]int{"CreateUser:MethodPost": 1, "SendLoginLink:MethodPost": 1}
+	if !reflect.DeepEqual(puts, map[string]int{"update": 1}) {
+		t.Errorf("c.do(http.MethodPut) calls: got %v", puts)
+	}
+	want := map[string]int{"CreateUser:MethodPost": 1, "SendLoginLink:MethodPost": 1, "update:MethodPut": 1}
 	if !reflect.DeepEqual(writes, want) {
 		t.Fatalf("write surface changed: got %v, want %v", writes, want)
 	}
@@ -177,6 +188,8 @@ func TestWriteSurface(t *testing.T) {
 				if !bodyIsCreateUserRequest(call.Args[3], fn) {
 					t.Fatal("CreateUser body must be a createUserRequest literal")
 				}
+			case "update":
+				checkUpdateFunc(t, fn)
 			case "SendLoginLink":
 				call := onlyDoCall(t, fn)
 				if !isLoginPath(call.Args[2], paramName(fn, 1)) {
@@ -196,6 +209,14 @@ func TestWriteSurface(t *testing.T) {
 	sort.Strings(fields)
 	if !reflect.DeepEqual(fields, []string{"displayName", "email", "emailVerified", "username"}) {
 		t.Fatalf("createUserRequest fields changed: %v", fields)
+	}
+	fields = nil
+	for i := 0; i < reflect.TypeOf(userUpdateRequest{}).NumField(); i++ {
+		fields = append(fields, reflect.TypeOf(userUpdateRequest{}).Field(i).Tag.Get("json"))
+	}
+	sort.Strings(fields)
+	if !reflect.DeepEqual(fields, []string{"disabled", "displayName", "email", "emailVerified", "firstName", "isAdmin", "lastName", "locale", "username"}) {
+		t.Fatalf("userUpdateRequest fields changed: %v", fields)
 	}
 	lt := reflect.TypeOf(loginLinkRequest{})
 	if lt.NumField() != 1 || lt.Field(0).Tag.Get("json") != "ttl" {
@@ -322,7 +343,7 @@ func isPkgDo(info *types.Info, fun ast.Expr, pkg *types.Package) bool {
 
 // checkDoCall requires the method argument of a c.do call to be a net/http
 // Method constant written in place, GET everywhere except the two writes.
-func checkDoCall(t *testing.T, fset *token.FileSet, info *types.Info, call *ast.CallExpr, owner string, posts map[string]int) {
+func checkDoCall(t *testing.T, fset *token.FileSet, info *types.Info, call *ast.CallExpr, owner string, posts, puts map[string]int) {
 	pos := fset.Position(call.Pos())
 	if len(call.Args) < 2 {
 		t.Errorf("%s: c.do arguments", pos)
@@ -342,6 +363,8 @@ func checkDoCall(t *testing.T, fset *token.FileSet, info *types.Info, call *ast.
 	case "MethodGet":
 	case "MethodPost":
 		posts[owner]++
+	case "MethodPut":
+		puts[owner]++
 	default:
 		t.Errorf("%s: c.do with %s", pos, c.Name())
 	}
@@ -404,15 +427,152 @@ func checkDoBody(t *testing.T, fset *token.FileSet, info *types.Info, fn *ast.Fu
 	}
 }
 
+// updateChanges is which function may assign which userUpdateRequest field.
+// Every other field goes back to Pocket ID as it was read.
+var updateChanges = map[string]map[string]bool{
+	"SetDisabled": {"Disabled": true},
+	"SetEmail":    {"Email": true, "EmailVerified": true},
+	"SetName":     {"DisplayName": true, "FirstName": true, "LastName": true},
+}
+
 // checkPinnedFieldAssign fails on any assignment to a field named
-// EmailVerified, TTL or linkTTL; the only approved settings are the literals
-// in CreateUser, SendLoginLink and New.
-func checkPinnedFieldAssign(t *testing.T, fset *token.FileSet, info *types.Info, lhs ast.Expr) {
-	if sel, ok := lhs.(*ast.SelectorExpr); ok {
-		if v, ok := info.Uses[sel.Sel].(*types.Var); ok && v.IsField() && (v.Name() == "EmailVerified" || v.Name() == "TTL" || v.Name() == "linkTTL") {
-			t.Errorf("%s: %s assigned outside its approved literal", fset.Position(lhs.Pos()), v.Name())
+// EmailVerified, TTL or linkTTL outside its approved literal, except
+// userUpdateRequest's own fields, which only the functions in updateChanges
+// may assign, each only its own, and EmailVerified only the literal true.
+func checkPinnedFieldAssign(t *testing.T, fset *token.FileSet, info *types.Info, lhs ast.Expr, owner string, rhs ast.Expr, plain bool) {
+	sel, ok := lhs.(*ast.SelectorExpr)
+	if !ok {
+		return
+	}
+	v, ok := info.Uses[sel.Sel].(*types.Var)
+	if !ok || !v.IsField() {
+		return
+	}
+	if s, ok := info.Selections[sel]; ok && isUpdateRequest(s.Recv()) {
+		if !plain || !updateChanges[owner][v.Name()] {
+			t.Errorf("%s: userUpdateRequest.%s changed in %s", fset.Position(lhs.Pos()), v.Name(), owner)
+			return
+		}
+		if v.Name() == "EmailVerified" {
+			if id, ok := rhs.(*ast.Ident); !ok || id.Name != "true" {
+				t.Errorf("%s: EmailVerified may only be set to true", fset.Position(lhs.Pos()))
+			}
+		}
+		return
+	}
+	if v.Name() == "EmailVerified" || v.Name() == "TTL" || v.Name() == "linkTTL" {
+		t.Errorf("%s: %s assigned outside its approved literal", fset.Position(lhs.Pos()), v.Name())
+	}
+}
+
+func isUpdateRequest(t types.Type) bool {
+	if p, ok := t.(*types.Pointer); ok {
+		t = p.Elem()
+	}
+	n, ok := t.(*types.Named)
+	return ok && n.Obj().Name() == "userUpdateRequest"
+}
+
+// checkUpdateFunc requires update to read the user, build the one
+// userUpdateRequest from what it read, field for field, and write it with PUT
+// to the same "/api/users/" + url.PathEscape(id) path.
+func checkUpdateFunc(t *testing.T, fn *ast.FuncDecl) {
+	t.Helper()
+	id := paramName(fn, 1)
+	var calls []*ast.CallExpr
+	var lits []*ast.CompositeLit
+	ast.Inspect(fn, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.CallExpr:
+			if sel, ok := x.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "do" {
+				calls = append(calls, x)
+			}
+		case *ast.CompositeLit:
+			if tid, ok := x.Type.(*ast.Ident); ok && tid.Name == "userUpdateRequest" {
+				lits = append(lits, x)
+			}
+		}
+		return true
+	})
+	if len(calls) != 2 || len(lits) != 1 {
+		t.Fatalf("update must make one read and one write and build one userUpdateRequest, found %d calls and %d literals", len(calls), len(lits))
+	}
+	for i, method := range []string{"MethodGet", "MethodPut"} {
+		if sel, ok := calls[i].Args[1].(*ast.SelectorExpr); !ok || sel.Sel.Name != method {
+			t.Fatalf("update's call %d must be %s", i+1, method)
+		}
+		if !isUserPath(calls[i].Args[2], id) {
+			t.Fatalf(`update's %s path must be "/api/users/" + url.PathEscape(%s)`, method, id)
 		}
 	}
+	read, ok := calls[0].Args[4].(*ast.UnaryExpr)
+	if !ok || read.Op != token.AND {
+		t.Fatal("update must read into a local value")
+	}
+	cur, ok := read.X.(*ast.Ident)
+	if !ok {
+		t.Fatal("update must read into a local value")
+	}
+	keys := map[string]bool{}
+	for _, el := range lits[0].Elts {
+		kv, ok := el.(*ast.KeyValueExpr)
+		if !ok {
+			t.Fatal("userUpdateRequest literal must use keyed fields")
+		}
+		key := kv.Key.(*ast.Ident).Name
+		keys[key] = true
+		v := kv.Value
+		if c, ok := v.(*ast.CallExpr); ok && len(c.Args) == 1 {
+			if f, ok := c.Fun.(*ast.Ident); ok && f.Name == "deref" {
+				v = c.Args[0]
+			}
+		}
+		if !fieldOf(v, cur.Name, key, false) {
+			t.Fatalf("userUpdateRequest.%s must be %s.%s as read", key, cur.Name, key)
+		}
+	}
+	if len(keys) != reflect.TypeOf(userUpdateRequest{}).NumField() {
+		t.Fatalf("userUpdateRequest literal must set every field from the read, sets %v", keys)
+	}
+	if body, ok := calls[1].Args[3].(*ast.Ident); !ok || !bodyIsLit(fn, body.Name, lits[0]) {
+		t.Fatal("update must write the userUpdateRequest it built")
+	}
+}
+
+// bodyIsLit reports whether name is assigned once in fn, from lit.
+func bodyIsLit(fn *ast.FuncDecl, name string, lit *ast.CompositeLit) bool {
+	n, good := 0, false
+	ast.Inspect(fn, func(x ast.Node) bool {
+		as, ok := x.(*ast.AssignStmt)
+		if !ok {
+			return true
+		}
+		for i, l := range as.Lhs {
+			if lid, ok := l.(*ast.Ident); ok && lid.Name == name {
+				n++
+				good = len(as.Rhs) == len(as.Lhs) && as.Rhs[i] == lit
+			}
+		}
+		return true
+	})
+	return n == 1 && good
+}
+
+func isUserPath(e ast.Expr, id string) bool {
+	b, ok := e.(*ast.BinaryExpr)
+	if !ok || b.Op != token.ADD || !isStr(b.X, "/api/users/") {
+		return false
+	}
+	call, ok := b.Y.(*ast.CallExpr)
+	if !ok || len(call.Args) != 1 {
+		return false
+	}
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok || sel.Sel.Name != "PathEscape" {
+		return false
+	}
+	arg, ok := call.Args[0].(*ast.Ident)
+	return ok && id != "" && arg.Name == id
 }
 
 // onlyDoCall returns the single c.do call in fn, which must have four arguments.

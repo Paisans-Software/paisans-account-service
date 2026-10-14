@@ -47,7 +47,7 @@ func TestCallbackPreProviderRefusals(t *testing.T) {
 	wrongPurpose, _ := sign(key, "session", loginState{State: "s", Exp: future})
 	cases := map[string]struct{ cookie, query string }{
 		"missing":       {"", "s"},
-		"tampered":      {good[:len(good)-2] + "AA", "s"},
+		"tampered":      {tamper(good), "s"},
 		"expired":       {expired, "s"},
 		"state":         {good, "other"},
 		"wrong purpose": {wrongPurpose, "s"},
@@ -109,4 +109,15 @@ func TestAdmitReturnsToNext(t *testing.T) {
 			t.Errorf("next %q: %d %s", next, rec.Code, rec.Header().Get("Location"))
 		}
 	}
+}
+
+// tamper changes a signed value's first character to a different one. Every
+// bit of a base64 value's first character is significant, unlike its last,
+// so the result never decodes to the original.
+func tamper(v string) string {
+	first := byte('A')
+	if v[0] == first {
+		first = 'B'
+	}
+	return string(first) + v[1:]
 }

@@ -4,6 +4,8 @@ package idptest
 import (
 	"context"
 	"fmt"
+	"slices"
+	"sort"
 	"strings"
 	"sync"
 
@@ -36,6 +38,16 @@ type Fake struct {
 	OnSendLink func()
 	// AfterSendLink, if set, runs once SendLoginLink has sent, outside the lock.
 	AfterSendLink func()
+	// FriendlyNames maps a group name to its display name; a group without
+	// one is shown by its name. Every key of Groups is a group, ID "g-"+name.
+	FriendlyNames map[string]string
+	// OnChangeGroups, if set, runs once ChangeGroups has made its fresh read
+	// and before it writes, outside the lock.
+	OnChangeGroups func()
+	// FailGroupReadBack makes ChangeGroups write and then fail to read back.
+	FailGroupReadBack error
+	// GroupWrites counts the group writes ChangeGroups made.
+	GroupWrites int
 }
 
 func (f *Fake) UsernameTaken(_ context.Context, n string) (bool, error) {
@@ -183,4 +195,164 @@ func (f *Fake) SetName(_ context.Context, id string, n idp.Name) error {
 	return f.update(id, func(u *idp.User) {
 		u.DisplayName, u.FirstName, u.LastName = n.DisplayName, n.FirstName, n.LastName
 	})
+}
+
+// GroupID is the ID the fake gives the group named name.
+func GroupID(name string) string { return "g-" + name }
+
+func (f *Fake) group(name string) idp.Group {
+	friendly := f.FriendlyNames[name]
+	if friendly == "" {
+		friendly = name
+	}
+	return idp.Group{ID: GroupID(name), Name: name, FriendlyName: friendly}
+}
+
+func (f *Fake) ListGroups(context.Context) ([]idp.Group, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.FailLookup != nil {
+		return nil, f.FailLookup
+	}
+	names := make([]string, 0, len(f.Groups))
+	for n := range f.Groups {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	out := make([]idp.Group, 0, len(names))
+	for _, n := range names {
+		out = append(out, f.group(n))
+	}
+	return out, nil
+}
+
+// userGroups is the groups of the user with id, sorted by name; f.mu is held.
+func (f *Fake) userGroups(id string) ([]idp.Group, string, error) {
+	username := ""
+	for _, u := range f.Users {
+		if u.ID == id {
+			username = u.Username
+		}
+	}
+	if username == "" {
+		return nil, "", idp.ErrNotFound
+	}
+	var names []string
+	for n, members := range f.Groups {
+		if slices.Contains(members, username) {
+			names = append(names, n)
+		}
+	}
+	sort.Strings(names)
+	out := []idp.Group{}
+	for _, n := range names {
+		out = append(out, f.group(n))
+	}
+	return out, username, nil
+}
+
+func (f *Fake) UserGroups(_ context.Context, id string) ([]idp.Group, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.FailLookup != nil {
+		return nil, f.FailLookup
+	}
+	gs, _, err := f.userGroups(id)
+	return gs, err
+}
+
+// In reports whether the user named username is in the group named group.
+func (f *Fake) In(username, group string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Contains(f.Groups[group], username)
+}
+
+// SetIn puts the user named username in the group named group, or takes them
+// out, as another admin or the operator reconciler would.
+func (f *Fake) SetIn(username, group string, in bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.Groups[group] = slices.DeleteFunc(f.Groups[group], func(m string) bool { return m == username })
+	if in {
+		f.Groups[group] = append(f.Groups[group], username)
+	}
+}
+
+// ChangeGroups behaves as the Pocket ID client's: a fresh read, the read
+// list plus add minus remove, the same refusals, then the write.
+func (f *Fake) ChangeGroups(_ context.Context, id string, add, remove []string) (idp.GroupChange, error) {
+	f.mu.Lock()
+	if f.FailLookup != nil {
+		f.mu.Unlock()
+		return idp.GroupChange{}, f.FailLookup
+	}
+	if _, _, err := f.userGroups(id); err != nil {
+		f.mu.Unlock()
+		return idp.GroupChange{}, err
+	}
+	f.mu.Unlock()
+	if f.OnChangeGroups != nil {
+		f.OnChangeGroups()
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	before, username, err := f.userGroups(id)
+	if err != nil {
+		return idp.GroupChange{}, err
+	}
+	name := func(gid string) (string, bool) {
+		n, ok := strings.CutPrefix(gid, "g-")
+		if _, exists := f.Groups[n]; !ok || !exists {
+			return "", false
+		}
+		return n, true
+	}
+	in := map[string]bool{}
+	for _, g := range before {
+		in[g.Name] = true
+	}
+	next := map[string]bool{}
+	for n := range in {
+		next[n] = true
+	}
+	for _, gid := range add {
+		n, ok := name(gid)
+		if !ok {
+			return idp.GroupChange{}, idp.ErrNoSuchGroup
+		}
+		if !slices.Contains(remove, gid) {
+			next[n] = true
+		}
+	}
+	for _, gid := range remove {
+		if n, ok := name(gid); ok {
+			delete(next, n)
+		}
+	}
+	if next[idp.OperatorsGroup] != in[idp.OperatorsGroup] {
+		return idp.GroupChange{}, idp.ErrOperatorsGroup
+	}
+	if f.FailUpdate != nil {
+		return idp.GroupChange{}, f.FailUpdate
+	}
+	var ch idp.GroupChange
+	for n := range f.Groups {
+		switch {
+		case next[n] && !in[n]:
+			f.Groups[n] = append(f.Groups[n], username)
+			ch.Added = append(ch.Added, f.group(n))
+		case !next[n] && in[n]:
+			f.Groups[n] = slices.DeleteFunc(f.Groups[n], func(m string) bool { return m == username })
+			ch.Removed = append(ch.Removed, f.group(n))
+		}
+	}
+	byName := func(a, b idp.Group) int { return strings.Compare(a.Name, b.Name) }
+	slices.SortFunc(ch.Added, byName)
+	slices.SortFunc(ch.Removed, byName)
+	f.GroupWrites++
+	if f.FailGroupReadBack != nil {
+		return ch, fmt.Errorf("%w: %w", idp.ErrUnconfirmed, f.FailGroupReadBack)
+	}
+	return ch, nil
 }

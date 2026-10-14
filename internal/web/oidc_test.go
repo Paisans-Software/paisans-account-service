@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/paisans-software/paisans-invite/internal/config"
+	"github.com/paisans-software/paisans-account-service/internal/config"
 )
 
 // fakeOP is a minimal OpenID provider: discovery, JWKS and a token endpoint

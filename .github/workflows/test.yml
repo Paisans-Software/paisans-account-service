@@ -11,13 +11,13 @@ jobs:
         image: postgres:18
         env:
           POSTGRES_PASSWORD: test
-          POSTGRES_DB: invite
+          POSTGRES_DB: account
         ports: ["5432:5432"]
         options: >-
-          --health-cmd "pg_isready -U postgres -d invite"
+          --health-cmd "pg_isready -U postgres -d account"
           --health-interval 2s --health-timeout 5s --health-retries 20
     env:
-      INVITE_TEST_DATABASE_URL: postgres://postgres:test@localhost:5432/invite?sslmode=disable
+      ACCOUNT_TEST_DATABASE_URL: postgres://postgres:test@localhost:5432/account?sslmode=disable
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5

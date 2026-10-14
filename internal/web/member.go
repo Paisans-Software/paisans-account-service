@@ -7,8 +7,8 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/paisans-software/paisans-invite/internal/flow"
-	"github.com/paisans-software/paisans-invite/internal/store"
+	"github.com/paisans-software/paisans-account-service/internal/flow"
+	"github.com/paisans-software/paisans-account-service/internal/store"
 )
 
 type homeData struct {

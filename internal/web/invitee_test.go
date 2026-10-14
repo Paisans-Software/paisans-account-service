@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/paisans-software/paisans-invite/internal/flow"
+	"github.com/paisans-software/paisans-account-service/internal/flow"
 )
 
 func (h harness) invite(t *testing.T) (string, string) {

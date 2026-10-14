@@ -10,7 +10,7 @@ import (
 
 	gomail "github.com/wneessen/go-mail"
 
-	"github.com/paisans-software/paisans-invite/internal/config"
+	"github.com/paisans-software/paisans-account-service/internal/config"
 )
 
 type Sender interface {

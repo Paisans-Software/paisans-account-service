@@ -13,7 +13,7 @@ import (
 	"github.com/coreos/go-oidc/v3/oidc"
 	"golang.org/x/oauth2"
 
-	"github.com/paisans-software/paisans-invite/internal/config"
+	"github.com/paisans-software/paisans-account-service/internal/config"
 )
 
 type authenticator struct {

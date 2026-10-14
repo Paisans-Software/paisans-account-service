@@ -15,11 +15,11 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/paisans-software/paisans-invite/internal/coc"
-	"github.com/paisans-software/paisans-invite/internal/emailhash"
-	"github.com/paisans-software/paisans-invite/internal/idp"
-	imail "github.com/paisans-software/paisans-invite/internal/mail"
-	"github.com/paisans-software/paisans-invite/internal/store"
+	"github.com/paisans-software/paisans-account-service/internal/coc"
+	"github.com/paisans-software/paisans-account-service/internal/emailhash"
+	"github.com/paisans-software/paisans-account-service/internal/idp"
+	imail "github.com/paisans-software/paisans-account-service/internal/mail"
+	"github.com/paisans-software/paisans-account-service/internal/store"
 )
 
 var (

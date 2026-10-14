@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/paisans-software/paisans-invite/internal/idp"
+	"github.com/paisans-software/paisans-account-service/internal/idp"
 )
 
 type Client struct {

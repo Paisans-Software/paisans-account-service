@@ -7,8 +7,8 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/paisans-software/paisans-invite/internal/flow"
-	"github.com/paisans-software/paisans-invite/internal/store"
+	"github.com/paisans-software/paisans-account-service/internal/flow"
+	"github.com/paisans-software/paisans-account-service/internal/store"
 )
 
 // Error text on the admin page is chosen by the server from a fixed code, so a

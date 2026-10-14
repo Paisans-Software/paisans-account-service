@@ -14,13 +14,13 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/paisans-software/paisans-invite/internal/coc"
-	"github.com/paisans-software/paisans-invite/internal/config"
-	"github.com/paisans-software/paisans-invite/internal/flow"
-	"github.com/paisans-software/paisans-invite/internal/idp/pocketid"
-	"github.com/paisans-software/paisans-invite/internal/mail"
-	"github.com/paisans-software/paisans-invite/internal/store"
-	"github.com/paisans-software/paisans-invite/internal/web"
+	"github.com/paisans-software/paisans-account-service/internal/coc"
+	"github.com/paisans-software/paisans-account-service/internal/config"
+	"github.com/paisans-software/paisans-account-service/internal/flow"
+	"github.com/paisans-software/paisans-account-service/internal/idp/pocketid"
+	"github.com/paisans-software/paisans-account-service/internal/mail"
+	"github.com/paisans-software/paisans-account-service/internal/store"
+	"github.com/paisans-software/paisans-account-service/internal/web"
 )
 
 func main() {

@@ -9,8 +9,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/paisans-software/paisans-invite/internal/config"
-	"github.com/paisans-software/paisans-invite/internal/flow"
+	"github.com/paisans-software/paisans-account-service/internal/config"
+	"github.com/paisans-software/paisans-account-service/internal/flow"
 )
 
 type pinger interface{ Ping(context.Context) error }

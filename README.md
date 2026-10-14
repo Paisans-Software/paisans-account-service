@@ -1,4 +1,4 @@
-# paisans-invite
+# paisans-account-service
 
 paisans-invite is a small Go service where members make invite links and invitees agree to the community's code of conduct, and choose their details, before an account is created at Pocket ID. An admin may approve each application first. It is deployed by the `invite` kind of [`paisans-stack`](https://github.com/Paisans-Software/paisans-stack), which renders the environment below.
 
@@ -26,4 +26,4 @@ paisans-invite is a small Go service where members make invite links and invitee
 
 ## Tests
 
-Run the tests: `INVITE_TEST_DATABASE_URL=postgres://… go test ./...`
+Run the tests: `ACCOUNT_TEST_DATABASE_URL=postgres://… go test ./...`

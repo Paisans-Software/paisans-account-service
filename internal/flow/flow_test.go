@@ -9,13 +9,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/paisans-software/paisans-invite/internal/coc"
-	"github.com/paisans-software/paisans-invite/internal/flow"
-	"github.com/paisans-software/paisans-invite/internal/idp"
-	"github.com/paisans-software/paisans-invite/internal/idp/idptest"
-	"github.com/paisans-software/paisans-invite/internal/mail/mailtest"
-	"github.com/paisans-software/paisans-invite/internal/store"
-	"github.com/paisans-software/paisans-invite/internal/store/storetest"
+	"github.com/paisans-software/paisans-account-service/internal/coc"
+	"github.com/paisans-software/paisans-account-service/internal/flow"
+	"github.com/paisans-software/paisans-account-service/internal/idp"
+	"github.com/paisans-software/paisans-account-service/internal/idp/idptest"
+	"github.com/paisans-software/paisans-account-service/internal/mail/mailtest"
+	"github.com/paisans-software/paisans-account-service/internal/store"
+	"github.com/paisans-software/paisans-account-service/internal/store/storetest"
 )
 
 var ctx = context.Background()

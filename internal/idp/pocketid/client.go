@@ -349,3 +349,188 @@ func (c *Client) SetName(ctx context.Context, id string, n idp.Name) error {
 	slog.Info("identity provider write", "action", "user.name", "user_id", id)
 	return nil
 }
+
+type groupDTO struct {
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	FriendlyName string `json:"friendlyName"`
+}
+
+func (g groupDTO) group() idp.Group {
+	return idp.Group{ID: g.ID, Name: g.Name, FriendlyName: g.FriendlyName}
+}
+
+// userGroupsRequest is the whole body of the group write,
+// PUT /api/users/:id/user-groups. Pocket ID replaces the user's groups with
+// exactly this list. Its one field, and the one place it is built, are pinned
+// by TestWriteSurface.
+type userGroupsRequest struct {
+	UserGroupIDs []string `json:"userGroupIds"`
+}
+
+// listGroups returns every group.
+func (c *Client) listGroups(ctx context.Context) ([]idp.Group, error) {
+	var out []idp.Group
+	for page := 1; ; page++ {
+		if page > maxPages {
+			return nil, fmt.Errorf("identity provider GET /api/user-groups: more than %d pages", maxPages)
+		}
+		q := url.Values{"pagination[page]": {fmt.Sprint(page)}, "pagination[limit]": {"100"}}
+		var res struct {
+			Data       []groupDTO `json:"data"`
+			Pagination struct {
+				TotalPages int `json:"totalPages"`
+			} `json:"pagination"`
+		}
+		if err := c.do(ctx, http.MethodGet, "/api/user-groups?"+q.Encode(), nil, &res); err != nil {
+			return nil, err
+		}
+		for _, g := range res.Data {
+			out = append(out, g.group())
+		}
+		if page >= res.Pagination.TotalPages {
+			return out, nil
+		}
+	}
+}
+
+// ListGroups returns every group, for the admins' groups page.
+func (c *Client) ListGroups(ctx context.Context) ([]idp.Group, error) { return c.listGroups(ctx) }
+
+// userGroups reads the user, GET /api/users/:id, for the groups it is in.
+func (c *Client) userGroups(ctx context.Context, id string) ([]idp.Group, error) {
+	var u struct {
+		UserGroups []groupDTO `json:"userGroups"`
+	}
+	if err := c.do(ctx, http.MethodGet, "/api/users/"+url.PathEscape(id), nil, &u); err != nil {
+		return nil, err
+	}
+	out := make([]idp.Group, 0, len(u.UserGroups))
+	for _, g := range u.UserGroups {
+		out = append(out, g.group())
+	}
+	return out, nil
+}
+
+func (c *Client) UserGroups(ctx context.Context, id string) ([]idp.Group, error) {
+	return c.userGroups(ctx, id)
+}
+
+// ChangeGroups reads the user's groups afresh and writes them back with only
+// the requested change, so that a change another admin made in between to
+// any other group is kept. TestWriteSurface pins its shape.
+func (c *Client) ChangeGroups(ctx context.Context, id string, add, remove []string) (idp.GroupChange, error) {
+	all, err := c.listGroups(ctx)
+	if err != nil {
+		return idp.GroupChange{}, err
+	}
+	before, err := c.userGroups(ctx, id)
+	if err != nil {
+		return idp.GroupChange{}, err
+	}
+	next := groupList(groupIDs(before), add, remove)
+	if err := checkGroups(before, next, all); err != nil {
+		return idp.GroupChange{}, err
+	}
+	if err := c.do(ctx, http.MethodPut, "/api/users/"+url.PathEscape(id)+"/user-groups", userGroupsRequest{UserGroupIDs: next}, nil); err != nil {
+		return idp.GroupChange{}, err
+	}
+	slog.Info("identity provider write", "action", "user.groups", "user_id", id)
+	after, err := c.userGroups(ctx, id)
+	if err != nil {
+		return groupChange(before, named(next, before, all)), fmt.Errorf("%w: %w", idp.ErrUnconfirmed, err)
+	}
+	return groupChange(before, after), nil
+}
+
+func groupIDs(gs []idp.Group) []string {
+	out := make([]string, 0, len(gs))
+	for _, g := range gs {
+		out = append(out, g.ID)
+	}
+	return out
+}
+
+func contains(list []string, s string) bool {
+	for _, x := range list {
+		if x == s {
+			return true
+		}
+	}
+	return false
+}
+
+// groupList is the list the group write sends: cur in its own order without
+// the IDs in remove, then each ID in add not already there. A group neither
+// added nor removed stays exactly as cur has it.
+func groupList(cur, add, remove []string) []string {
+	out := []string{}
+	for _, id := range cur {
+		if !contains(remove, id) && !contains(out, id) {
+			out = append(out, id)
+		}
+	}
+	for _, id := range add {
+		if !contains(remove, id) && !contains(out, id) {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+// named resolves each ID to a group the user is in or the provider has, in
+// the order of ids; an ID neither knows is left out.
+func named(ids []string, known ...[]idp.Group) []idp.Group {
+	var out []idp.Group
+	for _, id := range ids {
+	find:
+		for _, list := range known {
+			for _, g := range list {
+				if g.ID == id {
+					out = append(out, g)
+					break find
+				}
+			}
+		}
+	}
+	return out
+}
+
+func inOperators(gs []idp.Group) bool {
+	for _, g := range gs {
+		if g.Name == idp.OperatorsGroup {
+			return true
+		}
+	}
+	return false
+}
+
+// checkGroups refuses next if it names a group that neither the user's own
+// list nor the provider's has, or if it would put the user in OperatorsGroup
+// or take them out of it.
+func checkGroups(before []idp.Group, next []string, all []idp.Group) error {
+	resolved := named(next, before, all)
+	if len(resolved) != len(next) {
+		return idp.ErrNoSuchGroup
+	}
+	if inOperators(before) != inOperators(resolved) {
+		return idp.ErrOperatorsGroup
+	}
+	return nil
+}
+
+// groupChange is the difference between two lists of a user's groups.
+func groupChange(before, after []idp.Group) idp.GroupChange {
+	var ch idp.GroupChange
+	for _, g := range after {
+		if !contains(groupIDs(before), g.ID) {
+			ch.Added = append(ch.Added, g)
+		}
+	}
+	for _, g := range before {
+		if !contains(groupIDs(after), g.ID) {
+			ch.Removed = append(ch.Removed, g)
+		}
+	}
+	return ch
+}

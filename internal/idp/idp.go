@@ -30,6 +30,28 @@ const MaxFirstName, MaxLastName = 50, 50
 
 type NewUser struct{ Username, Email, DisplayName string }
 
+// OperatorsGroup is the group the deployment's configuration owns: the
+// service shows it and never changes who is in it.
+const OperatorsGroup = "operators"
+
+var (
+	// ErrOperatorsGroup is a group change that would add a user to, or take
+	// them out of, OperatorsGroup.
+	ErrOperatorsGroup = errors.New("identity provider: operators membership would change")
+	// ErrNoSuchGroup is a group change naming a group the provider does not have.
+	ErrNoSuchGroup = errors.New("identity provider: no such group")
+	// ErrUnconfirmed is a group change that was sent but could not be read
+	// back; the GroupChange returned with it is what was sent.
+	ErrUnconfirmed = errors.New("identity provider: the group change was sent but could not be read back")
+)
+
+// Group is one of the provider's groups: Name is the value in the groups
+// claim, FriendlyName the one people read.
+type Group struct{ ID, Name, FriendlyName string }
+
+// GroupChange is what one group change did to a user.
+type GroupChange struct{ Added, Removed []Group }
+
 type Provider interface {
 	UsernameTaken(ctx context.Context, username string) (bool, error)
 	EmailTaken(ctx context.Context, email string) (bool, error)
@@ -49,4 +71,14 @@ type Provider interface {
 	SetEmail(ctx context.Context, id, email string) error
 	// SetName sets a user's display, first and last name, changing nothing else.
 	SetName(ctx context.Context, id string, n Name) error
+	// ListGroups returns every group.
+	ListGroups(ctx context.Context) ([]Group, error)
+	// UserGroups returns the groups a user is in, or ErrNotFound.
+	UserGroups(ctx context.Context, userID string) ([]Group, error)
+	// ChangeGroups reads the user's groups afresh, adds the groups whose IDs
+	// are in add and takes out those in remove, keeping every other group as
+	// read. It refuses with ErrOperatorsGroup a change to OperatorsGroup
+	// membership and with ErrNoSuchGroup an unknown group, writing nothing.
+	// It returns what actually changed, read back after the write.
+	ChangeGroups(ctx context.Context, userID string, add, remove []string) (GroupChange, error)
 }

@@ -19,7 +19,7 @@ const sessionNotice = "Pocket ID refuses their next sign-in, but an app that kee
 var userErrors = []error{
 	flow.ErrOperator, flow.ErrSelf, flow.ErrReasonRequired, flow.ErrMemberBanned, flow.ErrNoSuchMember,
 	flow.ErrInvalidEmail, flow.ErrSameAddress, flow.ErrCodeWrong, flow.ErrCodeExpired, flow.ErrAddressRefused,
-	flow.ErrInvalidNames, flow.ErrForbidden,
+	flow.ErrInvalidNames, flow.ErrForbidden, flow.ErrOperatorsGroup, flow.ErrNoSuchGroup, flow.ErrNoGroupChange,
 }
 
 // userError returns the sentence for err, or "" if it is not one a person

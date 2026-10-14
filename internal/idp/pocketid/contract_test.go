@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -181,6 +182,119 @@ func TestContractUpdate(t *testing.T) {
 
 	if _, err := c.GetUser(ctx, "00000000-0000-0000-0000-00000000dead"); !errors.Is(err, idp.ErrNotFound) {
 		t.Fatalf("missing user: %v", err)
+	}
+}
+
+// The group write changes exactly the groups it names: a group added behind
+// its back is kept, operators membership is refused both ways, and no other
+// field of the user, nor another user's groups, changes.
+func TestContractGroups(t *testing.T) {
+	base, key := os.Getenv("CONTRACT_IDP_URL"), os.Getenv("CONTRACT_API_KEY")
+	c, err := New(base, key, &http.Client{Timeout: 10 * time.Second}, 7*24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	name := fmt.Sprintf("groups%d", time.Now().UnixNano()%1e9)
+	u, err := c.CreateUser(ctx, idp.NewUser{Username: name, Email: name + "@example.org", DisplayName: "Groups"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := c.CreateUser(ctx, idp.NewUser{Username: name + "o", Email: name + "o@example.org", DisplayName: "Other"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	group := func(n string) string {
+		t.Helper()
+		var found struct {
+			Data []struct{ ID, Name string } `json:"data"`
+		}
+		api(t, base, key, http.MethodGet, "/api/user-groups?search="+url.QueryEscape(n), nil, &found)
+		for _, g := range found.Data {
+			if g.Name == n {
+				return g.ID
+			}
+		}
+		var g struct {
+			ID string `json:"id"`
+		}
+		api(t, base, key, http.MethodPost, "/api/user-groups", map[string]any{"name": n, "friendlyName": n}, &g)
+		return g.ID
+	}
+	g1, g2, ops := group(name+"-one"), group(name+"-two"), group(idp.OperatorsGroup)
+	members := os.Getenv("CONTRACT_GROUP_ID")
+	ids := func(id string) string {
+		t.Helper()
+		gs, err := c.UserGroups(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []string
+		for _, g := range gs {
+			out = append(out, g.ID)
+		}
+		sort.Strings(out)
+		return strings.Join(out, ",")
+	}
+	set := func(xs ...string) string { sort.Strings(xs); return strings.Join(xs, ",") }
+	read := func(id string) map[string]any {
+		var m map[string]any
+		api(t, base, key, http.MethodGet, "/api/users/"+id, nil, &m)
+		delete(m, "userGroups")
+		return m
+	}
+	before, otherBefore := read(u.ID), ids(other.ID)
+	if ids(u.ID) != members {
+		t.Fatalf("want the default group only, got %s", ids(u.ID))
+	}
+
+	ch, err := c.ChangeGroups(ctx, u.ID, []string{g1}, nil)
+	if err != nil || len(ch.Added) != 1 || ch.Added[0].ID != g1 || len(ch.Removed) != 0 {
+		t.Fatalf("add: %+v %v", ch, err)
+	}
+	if got := ids(u.ID); got != set(members, g1) {
+		t.Fatalf("after add: %s", got)
+	}
+
+	// Another admin adds g2 directly; removing g1 keeps it.
+	api(t, base, key, http.MethodPut, "/api/users/"+u.ID+"/user-groups", map[string]any{"userGroupIds": []string{members, g1, g2}}, nil)
+	ch, err = c.ChangeGroups(ctx, u.ID, nil, []string{g1})
+	if err != nil || len(ch.Removed) != 1 || ch.Removed[0].ID != g1 || len(ch.Added) != 0 {
+		t.Fatalf("remove: %+v %v", ch, err)
+	}
+	if got := ids(u.ID); got != set(members, g2) {
+		t.Fatalf("after remove: %s", got)
+	}
+
+	if _, err := c.ChangeGroups(ctx, u.ID, []string{ops}, nil); !errors.Is(err, idp.ErrOperatorsGroup) {
+		t.Fatalf("adding operators: %v", err)
+	}
+	api(t, base, key, http.MethodPut, "/api/users/"+u.ID+"/user-groups", map[string]any{"userGroupIds": []string{members, g2, ops}}, nil)
+	if _, err := c.ChangeGroups(ctx, u.ID, nil, []string{ops}); !errors.Is(err, idp.ErrOperatorsGroup) {
+		t.Fatalf("removing operators: %v", err)
+	}
+	// An operator's other groups change, and operators stays.
+	if _, err := c.ChangeGroups(ctx, u.ID, []string{g1}, []string{g2}); err != nil {
+		t.Fatal(err)
+	}
+	if got := ids(u.ID); got != set(members, g1, ops) {
+		t.Fatalf("operator's groups: %s", got)
+	}
+	if _, err := c.ChangeGroups(ctx, u.ID, []string{"00000000-0000-0000-0000-00000000dead"}, nil); !errors.Is(err, idp.ErrNoSuchGroup) {
+		t.Fatalf("unknown group: %v", err)
+	}
+
+	after := read(u.ID)
+	for k, v := range before {
+		if fmt.Sprint(after[k]) != fmt.Sprint(v) {
+			t.Errorf("%s changed: %v -> %v", k, v, after[k])
+		}
+	}
+	if len(after) != len(before) {
+		t.Errorf("fields changed: %v -> %v", before, after)
+	}
+	if got := ids(other.ID); got != otherBefore {
+		t.Errorf("another user's groups changed: %s -> %s", otherBefore, got)
 	}
 }
 

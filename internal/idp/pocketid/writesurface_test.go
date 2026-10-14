@@ -1,11 +1,17 @@
 package pocketid
 
 import (
+	"context"
+	"encoding/json"
+	"errors"
 	"go/ast"
 	"go/importer"
 	"go/parser"
 	"go/token"
 	"go/types"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -13,6 +19,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/paisans-software/paisans-account-service/internal/idp"
 )
 
 var allowedImports = map[string]bool{
@@ -46,10 +54,12 @@ func recvName(f *types.Func) string {
 	return "?"
 }
 
-// The service is approved to make exactly three writes at the identity
-// provider: create a user, send a sign-in link, and update a user, where the
+// The service is approved to make exactly four writes at the identity
+// provider: create a user, send a sign-in link, update a user, where the
 // update sends every field back as read and only SetDisabled, SetEmail and
-// SetName may change a field, each its own. This test is type-checked, so a shadowed name or a look-alike
+// SetName may change a field, each its own, and set a user's groups, where
+// ChangeGroups sends the list it has just read with only the requested
+// additions and removals, after checkGroups. This test is type-checked, so a shadowed name or a look-alike
 // function cannot stand in for net/http. It fails on a third write, on a write
 // moved to another function, on any other way of building or sending a request,
 // on an import that could open a connection by another route, on a changed
@@ -100,7 +110,8 @@ func TestWriteSurface(t *testing.T) {
 	writes := map[string]int{}
 	posts := map[string]int{}
 	exported := map[string]bool{"UsernameTaken": true, "EmailTaken": true, "FindUser": true, "AdminGroupEmails": true, "CreateUser": true, "SendLoginLink": true,
-		"ListUsers": true, "GetUser": true, "SetDisabled": true, "SetEmail": true, "SetName": true}
+		"ListUsers": true, "GetUser": true, "SetDisabled": true, "SetEmail": true, "SetName": true,
+		"ListGroups": true, "UserGroups": true, "ChangeGroups": true}
 	puts := map[string]int{}
 	for _, file := range parsed {
 		for _, decl := range file.Decls {
@@ -164,10 +175,10 @@ func TestWriteSurface(t *testing.T) {
 	if !reflect.DeepEqual(posts, map[string]int{"CreateUser": 1, "SendLoginLink": 1}) {
 		t.Errorf("c.do(http.MethodPost) calls: got %v", posts)
 	}
-	if !reflect.DeepEqual(puts, map[string]int{"update": 1}) {
+	if !reflect.DeepEqual(puts, map[string]int{"update": 1, "ChangeGroups": 1}) {
 		t.Errorf("c.do(http.MethodPut) calls: got %v", puts)
 	}
-	want := map[string]int{"CreateUser:MethodPost": 1, "SendLoginLink:MethodPost": 1, "update:MethodPut": 1}
+	want := map[string]int{"CreateUser:MethodPost": 1, "SendLoginLink:MethodPost": 1, "update:MethodPut": 1, "ChangeGroups:MethodPut": 1}
 	if !reflect.DeepEqual(writes, want) {
 		t.Fatalf("write surface changed: got %v, want %v", writes, want)
 	}
@@ -190,6 +201,13 @@ func TestWriteSurface(t *testing.T) {
 				}
 			case "update":
 				checkUpdateFunc(t, fn)
+			case "ChangeGroups":
+				checkChangeGroupsFunc(t, fn)
+			case "userGroups":
+				call := onlyDoCall(t, fn)
+				if sel, ok := call.Args[1].(*ast.SelectorExpr); !ok || sel.Sel.Name != "MethodGet" || !isUserPath(call.Args[2], paramName(fn, 1)) {
+					t.Fatal(`userGroups must be one GET of "/api/users/" + url.PathEscape(id)`)
+				}
 			case "SendLoginLink":
 				call := onlyDoCall(t, fn)
 				if !isLoginPath(call.Args[2], paramName(fn, 1)) {
@@ -217,6 +235,24 @@ func TestWriteSurface(t *testing.T) {
 	sort.Strings(fields)
 	if !reflect.DeepEqual(fields, []string{"disabled", "displayName", "email", "emailVerified", "firstName", "isAdmin", "lastName", "locale", "username"}) {
 		t.Fatalf("userUpdateRequest fields changed: %v", fields)
+	}
+	gt := reflect.TypeOf(userGroupsRequest{})
+	if gt.NumField() != 1 || gt.Field(0).Tag.Get("json") != "userGroupIds" {
+		t.Fatalf("userGroupsRequest must have exactly one field, json \"userGroupIds\"")
+	}
+	groupLits := 0
+	for _, file := range parsed {
+		ast.Inspect(file, func(n ast.Node) bool {
+			if lit, ok := n.(*ast.CompositeLit); ok {
+				if id, ok := lit.Type.(*ast.Ident); ok && id.Name == "userGroupsRequest" {
+					groupLits++
+				}
+			}
+			return true
+		})
+	}
+	if groupLits != 1 {
+		t.Fatalf("the package must build exactly one userGroupsRequest, in ChangeGroups; found %d", groupLits)
 	}
 	lt := reflect.TypeOf(loginLinkRequest{})
 	if lt.NumField() != 1 || lt.Field(0).Tag.Get("json") != "ttl" {
@@ -460,7 +496,7 @@ func checkPinnedFieldAssign(t *testing.T, fset *token.FileSet, info *types.Info,
 		}
 		return
 	}
-	if v.Name() == "EmailVerified" || v.Name() == "TTL" || v.Name() == "linkTTL" {
+	if v.Name() == "EmailVerified" || v.Name() == "TTL" || v.Name() == "linkTTL" || v.Name() == "UserGroupIDs" {
 		t.Errorf("%s: %s assigned outside its approved literal", fset.Position(lhs.Pos()), v.Name())
 	}
 }
@@ -747,5 +783,324 @@ func checkCreateLiteral(t *testing.T, fn *ast.FuncDecl) {
 	})
 	if n != 1 {
 		t.Fatalf("CreateUser must build exactly one createUserRequest, found %d", n)
+	}
+}
+
+// groupAPI is a Pocket ID holding the groups in all and one user, u1, in the
+// groups whose IDs are in have. It answers the group listing, the user read
+// and the group write, applying the write to have, and records every call.
+// failReads makes every user read after the write fail.
+type groupAPI struct {
+	all       []map[string]any
+	have      []string
+	writes    int
+	failReads bool
+	calls     []call
+}
+
+func (g *groupAPI) serve(t *testing.T) *Client {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c := call{Method: r.Method, Path: r.URL.Path, Query: r.URL.RawQuery}
+		if b, _ := io.ReadAll(r.Body); len(b) > 0 {
+			c.Raw = string(b)
+		}
+		g.calls = append(g.calls, c)
+		switch {
+		case r.Method == "GET" && r.URL.Path == "/api/user-groups":
+			json.NewEncoder(w).Encode(map[string]any{"data": g.all, "pagination": map[string]any{"totalPages": 1}})
+		case r.Method == "GET" && r.URL.Path == "/api/users/u1":
+			if g.failReads && g.writes > 0 {
+				w.WriteHeader(500)
+				return
+			}
+			var mine []map[string]any
+			for _, id := range g.have {
+				for _, grp := range g.all {
+					if grp["id"] == id {
+						mine = append(mine, grp)
+					}
+				}
+			}
+			json.NewEncoder(w).Encode(map[string]any{"id": "u1", "username": "bob", "userGroups": mine})
+		case r.Method == "PUT" && r.URL.Path == "/api/users/u1/user-groups":
+			var body struct {
+				IDs []string `json:"userGroupIds"`
+			}
+			json.Unmarshal([]byte(c.Raw), &body)
+			g.have = body.IDs
+			g.writes++
+			w.Write([]byte(`{}`))
+		default:
+			w.WriteHeader(404)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return mustNew(t, srv.URL, srv.Client(), week)
+}
+
+func groupsNamed(names ...string) []map[string]any {
+	var out []map[string]any
+	for _, n := range names {
+		out = append(out, map[string]any{"id": "g-" + n, "name": n, "friendlyName": strings.ToUpper(n)})
+	}
+	return out
+}
+
+func names(gs []idp.Group) string {
+	var out []string
+	for _, g := range gs {
+		out = append(out, g.Name)
+	}
+	return strings.Join(out, ",")
+}
+
+// The group write sends exactly the list the fresh read found, with the
+// requested additions and removals and nothing else, and never one that
+// changes who is in operators. A failure is a question for the founder, not a
+// test to fix.
+func TestWriteSurfaceGroupBody(t *testing.T) {
+	all := groupsNamed("members", "admins", "wiki", "blog", "operators")
+	for _, c := range []struct {
+		name              string
+		have, add, remove []string
+		body              string // the PUT body, or "" for no write
+		err               error
+		added, removed    string
+	}{
+		{"add", []string{"g-members"}, []string{"g-admins"}, nil, `{"userGroupIds":["g-members","g-admins"]}`, nil, "admins", ""},
+		{"remove", []string{"g-members", "g-admins"}, nil, []string{"g-admins"}, `{"userGroupIds":["g-members"]}`, nil, "", "admins"},
+		{"both", []string{"g-members", "g-admins"}, []string{"g-wiki"}, []string{"g-members"}, `{"userGroupIds":["g-admins","g-wiki"]}`, nil, "wiki", "members"},
+		// wiki was added by someone else after the admin's page loaded: the
+		// fresh read has it, and it is kept.
+		{"concurrent", []string{"g-members", "g-wiki"}, []string{"g-blog"}, nil, `{"userGroupIds":["g-members","g-wiki","g-blog"]}`, nil, "blog", ""},
+		// admins was removed by someone else first: removing it again is a no-op.
+		{"already removed", []string{"g-members"}, []string{"g-wiki"}, []string{"g-admins"}, `{"userGroupIds":["g-members","g-wiki"]}`, nil, "wiki", ""},
+		{"already added", []string{"g-members", "g-wiki"}, []string{"g-wiki", "g-wiki"}, nil, `{"userGroupIds":["g-members","g-wiki"]}`, nil, "", ""},
+		{"operator keeps operators", []string{"g-operators", "g-admins"}, []string{"g-wiki"}, []string{"g-admins"}, `{"userGroupIds":["g-operators","g-wiki"]}`, nil, "wiki", "admins"},
+		// An ID both added and removed is removed: nothing is added that was asked to go.
+		{"added and removed", []string{"g-members", "g-wiki"}, []string{"g-wiki", "g-admins"}, []string{"g-wiki", "g-admins"}, `{"userGroupIds":["g-members"]}`, nil, "", "wiki"},
+		{"remove operators", []string{"g-operators", "g-admins"}, nil, []string{"g-operators"}, "", idp.ErrOperatorsGroup, "", ""},
+		{"add operators", []string{"g-members"}, []string{"g-operators"}, nil, "", idp.ErrOperatorsGroup, "", ""},
+		{"add unknown", []string{"g-members"}, []string{"g-nope"}, nil, "", idp.ErrNoSuchGroup, "", ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			api := &groupAPI{all: all, have: c.have}
+			cl := api.serve(t)
+			got, err := cl.ChangeGroups(context.Background(), "u1", c.add, c.remove)
+			if !errors.Is(err, c.err) || (c.err == nil && err != nil) {
+				t.Fatalf("error: %v, want %v", err, c.err)
+			}
+			var puts []call
+			for _, k := range api.calls {
+				if k.Method != "GET" {
+					puts = append(puts, k)
+				}
+			}
+			if c.body == "" {
+				if len(puts) != 0 {
+					t.Fatalf("wrote %+v", puts)
+				}
+				return
+			}
+			if len(puts) != 1 || puts[0].Method != "PUT" || puts[0].Raw != c.body {
+				t.Fatalf("writes %+v, want one PUT %s", puts, c.body)
+			}
+			// The user is read immediately before the write and again after it.
+			n := len(api.calls)
+			if n < 3 || api.calls[n-3].Path != "/api/users/u1" || api.calls[n-1].Path != "/api/users/u1" || api.calls[n-2].Method != "PUT" {
+				t.Fatalf("want a read, the write and a read, got %+v", api.calls)
+			}
+			if names(got.Added) != c.added || names(got.Removed) != c.removed {
+				t.Fatalf("change: added %q removed %q", names(got.Added), names(got.Removed))
+			}
+		})
+	}
+}
+
+// A write whose read-back fails reports what it sent, as unconfirmed.
+func TestGroupWriteUnconfirmed(t *testing.T) {
+	api := &groupAPI{all: groupsNamed("members", "admins"), have: []string{"g-members"}, failReads: true}
+	got, err := api.serve(t).ChangeGroups(context.Background(), "u1", []string{"g-admins"}, []string{"g-members"})
+	if !errors.Is(err, idp.ErrUnconfirmed) || api.writes != 1 || names(got.Added) != "admins" || names(got.Removed) != "members" {
+		t.Fatalf("%+v %v", got, err)
+	}
+}
+
+func TestListAndUserGroups(t *testing.T) {
+	api := &groupAPI{all: groupsNamed("members", "admins"), have: []string{"g-admins"}}
+	cl := api.serve(t)
+	all, err := cl.ListGroups(context.Background())
+	if err != nil || names(all) != "members,admins" || all[0].FriendlyName != "MEMBERS" || all[0].ID != "g-members" {
+		t.Fatalf("%+v %v", all, err)
+	}
+	mine, err := cl.UserGroups(context.Background(), "u1")
+	if err != nil || names(mine) != "admins" {
+		t.Fatalf("%+v %v", mine, err)
+	}
+	if _, err := cl.UserGroups(context.Background(), "nobody"); !errors.Is(err, idp.ErrNotFound) {
+		t.Fatalf("missing user: %v", err)
+	}
+}
+
+// checkChangeGroupsFunc requires ChangeGroups to be, in this order and at the
+// top level of its body: the group listing, all := c.listGroups(ctx); the
+// fresh read, before := c.userGroups(ctx, id); next := groupList(
+// groupIDs(before), add, remove); the refusal, if err := checkGroups(before,
+// next, all); err != nil { return ... }; the one write, a PUT of
+// userGroupsRequest{UserGroupIDs: next} to "/api/users/" + url.PathEscape(id)
+// + "/user-groups"; and the read after it, c.userGroups(ctx, id). Each of
+// all, before and next is assigned exactly once.
+func checkChangeGroupsFunc(t *testing.T, fn *ast.FuncDecl) {
+	t.Helper()
+	id, add, remove := paramName(fn, 1), paramName(fn, 2), paramName(fn, 3)
+	assigned := map[string]int{}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		if as, ok := n.(*ast.AssignStmt); ok {
+			for _, l := range as.Lhs {
+				if lid, ok := l.(*ast.Ident); ok {
+					assigned[lid.Name]++
+				}
+			}
+		}
+		return true
+	})
+	for _, v := range []string{"all", "before", "next"} {
+		if assigned[v] != 1 {
+			t.Fatalf("ChangeGroups must assign %s exactly once, assigns it %d times", v, assigned[v])
+		}
+	}
+	isCall := func(e ast.Expr, recv, name string, args ...func(ast.Expr) bool) bool {
+		c, ok := e.(*ast.CallExpr)
+		if !ok || len(c.Args) != len(args) {
+			return false
+		}
+		switch f := c.Fun.(type) {
+		case *ast.Ident:
+			if recv != "" || f.Name != name {
+				return false
+			}
+		case *ast.SelectorExpr:
+			if x, ok := f.X.(*ast.Ident); !ok || x.Name != recv || f.Sel.Name != name {
+				return false
+			}
+		default:
+			return false
+		}
+		for i, a := range args {
+			if !a(c.Args[i]) {
+				return false
+			}
+		}
+		return true
+	}
+	ident := func(name string) func(ast.Expr) bool {
+		return func(e ast.Expr) bool { x, ok := e.(*ast.Ident); return ok && x.Name == name }
+	}
+	recv := recvIdent(fn).Name
+	assignFrom := func(st ast.Stmt, v string, rhs func(ast.Expr) bool) bool {
+		as, ok := st.(*ast.AssignStmt)
+		if !ok || len(as.Rhs) != 1 || len(as.Lhs) == 0 {
+			return false
+		}
+		lid, ok := as.Lhs[0].(*ast.Ident)
+		return ok && lid.Name == v && rhs(as.Rhs[0])
+	}
+	readsUser := func(e ast.Expr) bool { return isCall(e, recv, "userGroups", ident("ctx"), ident(id)) }
+	ifInit := func(st ast.Stmt, call func(ast.Expr) bool) bool {
+		is, ok := st.(*ast.IfStmt)
+		if !ok || is.Init == nil || len(is.Body.List) == 0 {
+			return false
+		}
+		if _, ok := is.Body.List[len(is.Body.List)-1].(*ast.ReturnStmt); !ok {
+			return false
+		}
+		as, ok := is.Init.(*ast.AssignStmt)
+		return ok && len(as.Rhs) == 1 && call(as.Rhs[0])
+	}
+	isPut := func(e ast.Expr) bool {
+		c, ok := e.(*ast.CallExpr)
+		if !ok || len(c.Args) != 5 {
+			return false
+		}
+		if sel, ok := c.Fun.(*ast.SelectorExpr); !ok || sel.Sel.Name != "do" {
+			return false
+		}
+		if m, ok := c.Args[1].(*ast.SelectorExpr); !ok || m.Sel.Name != "MethodPut" {
+			return false
+		}
+		p, ok := c.Args[2].(*ast.BinaryExpr)
+		if !ok || p.Op != token.ADD || !isStr(p.Y, "/user-groups") || !isUserPath(p.X, id) {
+			return false
+		}
+		lit, ok := c.Args[3].(*ast.CompositeLit)
+		if !ok || len(lit.Elts) != 1 {
+			return false
+		}
+		if tid, ok := lit.Type.(*ast.Ident); !ok || tid.Name != "userGroupsRequest" {
+			return false
+		}
+		kv, ok := lit.Elts[0].(*ast.KeyValueExpr)
+		if !ok {
+			return false
+		}
+		if k, ok := kv.Key.(*ast.Ident); !ok || k.Name != "UserGroupIDs" {
+			return false
+		}
+		return ident("next")(kv.Value) && ident("nil")(c.Args[4])
+	}
+	steps := []struct {
+		what string
+		ok   func(ast.Stmt) bool
+	}{
+		{"all, err := c.listGroups(ctx)", func(st ast.Stmt) bool {
+			return assignFrom(st, "all", func(e ast.Expr) bool { return isCall(e, recv, "listGroups", ident("ctx")) })
+		}},
+		{"before, err := c.userGroups(ctx, id)", func(st ast.Stmt) bool { return assignFrom(st, "before", readsUser) }},
+		{"next := groupList(groupIDs(before), add, remove)", func(st ast.Stmt) bool {
+			return assignFrom(st, "next", func(e ast.Expr) bool {
+				return isCall(e, "", "groupList", func(a ast.Expr) bool { return isCall(a, "", "groupIDs", ident("before")) }, ident(add), ident(remove))
+			})
+		}},
+		{"if err := checkGroups(before, next, all); err != nil { return ... }", func(st ast.Stmt) bool {
+			return ifInit(st, func(e ast.Expr) bool {
+				return isCall(e, "", "checkGroups", ident("before"), ident("next"), ident("all"))
+			})
+		}},
+		{`if err := c.do(ctx, http.MethodPut, "/api/users/"+url.PathEscape(id)+"/user-groups", userGroupsRequest{UserGroupIDs: next}, nil); err != nil { return ... }`, func(st ast.Stmt) bool {
+			return ifInit(st, isPut)
+		}},
+		{"after, err := c.userGroups(ctx, id)", func(st ast.Stmt) bool { return assignFrom(st, "after", readsUser) }},
+	}
+	i := 0
+	for _, st := range fn.Body.List {
+		if i < len(steps) && steps[i].ok(st) {
+			i++
+		}
+	}
+	if i < len(steps) {
+		t.Fatalf("ChangeGroups must do, in order at the top level of its body: %s", steps[i].what)
+	}
+	// Between the fresh read and the write, nothing else reads or writes.
+	var between bool
+	for _, st := range fn.Body.List {
+		if steps[1].ok(st) {
+			between = true
+			continue
+		}
+		if steps[4].ok(st) {
+			break
+		}
+		if between {
+			ast.Inspect(st, func(n ast.Node) bool {
+				if c, ok := n.(*ast.CallExpr); ok {
+					if sel, ok := c.Fun.(*ast.SelectorExpr); ok {
+						if x, ok := sel.X.(*ast.Ident); ok && x.Name == recv {
+							t.Errorf("ChangeGroups calls %s.%s between the fresh read and the write", recv, sel.Sel.Name)
+						}
+					}
+				}
+				return true
+			})
+		}
 	}
 }

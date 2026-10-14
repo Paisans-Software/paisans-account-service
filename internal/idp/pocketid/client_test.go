@@ -3,11 +3,14 @@ package pocketid
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"net/url"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -34,12 +37,39 @@ func TestNewBoundsLinkLifetime(t *testing.T) {
 		0: false, -time.Hour: false, 59 * time.Minute: false, 745 * time.Hour: false,
 		90 * time.Minute: false, 24*time.Hour + time.Second: false,
 	} {
-		c, err := New("https://id.example.org", "KEY", nil, ttl)
+		c, err := New("http://pocket-id:1411", "KEY", nil, ttl)
 		if (err == nil) != ok || (c != nil) != ok {
 			t.Errorf("%v: client %v, err %v", ttl, c != nil, err)
 		}
 		if err != nil && strings.Contains(err.Error(), "KEY") {
 			t.Errorf("%v: error carries the key: %v", ttl, err)
+		}
+	}
+}
+
+// New refuses a base URL that is not private, as pocketid-go judges it, before
+// anything is sent; the error names the host and never the key.
+func TestNewRefusesAPublicAddress(t *testing.T) {
+	for _, c := range []struct {
+		base     string
+		networks []netip.Prefix
+		ok       bool
+	}{
+		{"http://10.44.0.1:1413", nil, true},
+		{"http://pocket-id:1411", nil, true},
+		{"http://[fd00::1]:1413", nil, true},
+		{"http://203.0.113.5:1413", []netip.Prefix{netip.MustParsePrefix("203.0.113.0/24")}, true},
+		{"https://id.example.org", nil, false},
+		{"http://203.0.113.5:1413", nil, false},
+		{"://bad", nil, false},
+		{"/api", nil, false},
+	} {
+		got, err := New(c.base, "KEY", nil, week, c.networks...)
+		if (err == nil) != c.ok || (got != nil) != c.ok {
+			t.Errorf("%s: client %v, err %v", c.base, got != nil, err)
+		}
+		if err != nil && strings.Contains(err.Error(), "KEY") {
+			t.Errorf("%s: error carries the key: %v", c.base, err)
 		}
 	}
 }
@@ -154,14 +184,12 @@ func TestCreateUserBody(t *testing.T) {
 	if got.Key != "KEY" {
 		t.Fatal("API key header missing")
 	}
-	want := map[string]bool{"username": true, "email": true, "emailVerified": true, "displayName": true}
-	for k := range got.Body {
-		if !want[k] {
-			t.Fatalf("unexpected body field %q", k)
-		}
-	}
-	if got.Body["emailVerified"] != false {
-		t.Fatal("emailVerified must be false")
+	// pocketid-go's NewUser always sends the names and the admin flag, here
+	// empty and false, and leaves out emailVerified, which Pocket ID then
+	// stores as false.
+	want := map[string]any{"username": "bob", "email": "b@x.org", "displayName": "Bob", "firstName": "", "lastName": "", "isAdmin": false}
+	if !reflect.DeepEqual(got.Body, want) {
+		t.Fatalf("create body\n got %v\nwant %v", got.Body, want)
 	}
 }
 
@@ -173,14 +201,15 @@ func TestSendLoginLink(t *testing.T) {
 	if (*calls)[0].Path != "/api/users/new-id/one-time-access-email" {
 		t.Fatal((*calls)[0].Path)
 	}
-	if got := (*calls)[0].Raw; got != `{"ttl":"168h"}` {
-		t.Fatalf("login-link body: got %s, want {\"ttl\":\"168h\"}", got)
+	if got := (*calls)[0].Raw; got != `{"ttl":"168h0m0s"}` {
+		t.Fatalf("login-link body: got %s, want {\"ttl\":\"168h0m0s\"}", got)
 	}
 }
 
-// The link's lifetime is the client's configured one, in whole hours.
+// The link's lifetime is the client's configured one, in whole hours, written
+// as a Go duration, which Pocket ID parses.
 func TestSendLoginLinkUsesConfiguredLifetime(t *testing.T) {
-	for days, want := range map[int]string{1: `{"ttl":"24h"}`, 14: `{"ttl":"336h"}`, 31: `{"ttl":"744h"}`} {
+	for days, want := range map[int]string{1: `{"ttl":"24h0m0s"}`, 14: `{"ttl":"336h0m0s"}`, 31: `{"ttl":"744h0m0s"}`} {
 		c, calls := fake(t, nil)
 		c.linkTTL = time.Duration(days) * 24 * time.Hour
 		if err := c.SendLoginLink(context.Background(), "new-id"); err != nil {
@@ -193,8 +222,8 @@ func TestSendLoginLinkUsesConfiguredLifetime(t *testing.T) {
 }
 
 // groupServer serves Pocket ID's group listing (a case-sensitive substring
-// search, one group per page) and each group with its users.
-func groupServer(t *testing.T, groups []map[string]any) (*Client, *[]call) {
+// search) and every user with their groups.
+func groupServer(t *testing.T, groups []map[string]any, users []map[string]any) (*Client, *[]call) {
 	var calls []call
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls = append(calls, call{Method: r.Method, Path: r.URL.Path, Query: r.URL.RawQuery})
@@ -202,43 +231,42 @@ func groupServer(t *testing.T, groups []map[string]any) (*Client, *[]call) {
 			w.WriteHeader(405)
 			return
 		}
-		var hits []map[string]any
-		for _, g := range groups {
-			if strings.Contains(g["name"].(string), r.URL.Query().Get("search")) {
-				hits = append(hits, g)
+		switch r.URL.Path {
+		case "/api/user-groups":
+			var hits []map[string]any
+			for _, g := range groups {
+				if strings.Contains(g["name"].(string), r.URL.Query().Get("search")) {
+					hits = append(hits, g)
+				}
 			}
+			json.NewEncoder(w).Encode(map[string]any{"data": hits, "pagination": map[string]any{"totalPages": 1}})
+		case "/api/users":
+			json.NewEncoder(w).Encode(map[string]any{"data": users, "pagination": map[string]any{"totalPages": 1}})
+		default:
+			w.WriteHeader(404)
 		}
-		if r.URL.Path == "/api/user-groups" {
-			page := 1
-			fmt.Sscan(r.URL.Query().Get("pagination[page]"), &page)
-			var data []map[string]any
-			if page >= 1 && page <= len(hits) {
-				data = []map[string]any{{"id": hits[page-1]["id"], "name": hits[page-1]["name"]}}
-			}
-			json.NewEncoder(w).Encode(map[string]any{"data": data, "pagination": map[string]any{"totalPages": len(hits), "currentPage": page}})
-			return
-		}
-		for _, g := range groups {
-			if r.URL.Path == "/api/user-groups/"+g["id"].(string) {
-				json.NewEncoder(w).Encode(g)
-				return
-			}
-		}
-		w.WriteHeader(404)
 	}))
 	t.Cleanup(srv.Close)
 	return mustNew(t, srv.URL, srv.Client(), week), &calls
 }
 
 func TestAdminGroupEmails(t *testing.T) {
-	c, calls := groupServer(t, []map[string]any{
-		{"id": "g1", "name": "superadmins", "users": []map[string]any{{"id": "9", "username": "z", "email": "z@x.org"}}},
-		{"id": "g2", "name": "admins", "users": []map[string]any{
-			{"id": "1", "username": "a", "email": "a@x.org"},
-			{"id": "2", "username": "b"},
-			{"id": "3", "username": "c", "email": "c@x.org", "disabled": true},
-		}},
-	})
+	in := func(ids ...string) []map[string]any {
+		var out []map[string]any
+		for _, id := range ids {
+			out = append(out, map[string]any{"id": id})
+		}
+		return out
+	}
+	c, calls := groupServer(t,
+		[]map[string]any{{"id": "g1", "name": "superadmins"}, {"id": "g2", "name": "admins"}},
+		[]map[string]any{
+			{"id": "9", "username": "z", "email": "z@x.org", "userGroups": in("g1")},
+			{"id": "1", "username": "a", "email": "a@x.org", "userGroups": in("g2", "g1")},
+			{"id": "2", "username": "b", "userGroups": in("g2")},
+			{"id": "3", "username": "c", "email": "c@x.org", "disabled": true, "userGroups": in("g2")},
+			{"id": "4", "username": "d", "email": "d@x.org"},
+		})
 	got, err := c.AdminGroupEmails(context.Background(), "admins")
 	if err != nil || len(got) != 1 || got[0] != "a@x.org" {
 		t.Fatalf("%v %v", got, err)
@@ -247,9 +275,6 @@ func TestAdminGroupEmails(t *testing.T) {
 		if cl.Method != "GET" {
 			t.Fatalf("a read made a %s", cl.Method)
 		}
-	}
-	if last := (*calls)[len(*calls)-1]; last.Path != "/api/user-groups/g2" {
-		t.Fatalf("read the wrong group: %s", last.Path)
 	}
 	if _, err := c.AdminGroupEmails(context.Background(), "nobody"); err == nil {
 		t.Fatal("a missing group must be an error")
@@ -278,7 +303,7 @@ func TestTransportErrorsDoNotEchoQuery(t *testing.T) {
 		if err == nil {
 			t.Fatal("want an error from a closed port")
 		}
-		for _, bad := range []string{"secret", "example.org", "KEY", "search"} {
+		for _, bad := range []string{"secret", "example.org", "KEY", "search", "pagination"} {
 			if strings.Contains(err.Error(), bad) {
 				t.Fatalf("error leaks %q: %v", bad, err)
 			}
@@ -286,8 +311,10 @@ func TestTransportErrorsDoNotEchoQuery(t *testing.T) {
 	}
 	_, err := c.EmailTaken(context.Background(), "secret@example.org")
 	check(err)
-	check(c.do(context.Background(), http.MethodGet, "/api/users?search=secret%40example.org", nil, nil))
-	check(mustNew(t, "://bad", nil, week).do(context.Background(), http.MethodGet, "/api/users?search=secret%40example.org", nil, nil))
+	_, err = c.ListGroups(context.Background())
+	check(err)
+	_, err = c.AdminGroupEmails(context.Background(), "secret")
+	check(err)
 }
 
 func TestRedirectIsAnError(t *testing.T) {
@@ -308,13 +335,38 @@ func TestRedirectIsAnError(t *testing.T) {
 	}
 }
 
-func TestListingIsCapped(t *testing.T) {
-	pages := make([][]map[string]any, maxPages+1)
-	c, calls := fakePaged(t, pages...)
-	if _, err := c.UsernameTaken(context.Background(), "a"); err == nil {
+// The group listing, the one request the package makes itself, stops at a
+// page cap so a misbehaving server cannot hold a request open.
+func TestGroupListingIsCapped(t *testing.T) {
+	n := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n++
+		json.NewEncoder(w).Encode(map[string]any{"data": groupsNamed(fmt.Sprint("g", n)), "pagination": map[string]any{"totalPages": maxPages + 1}})
+	}))
+	defer srv.Close()
+	if _, err := mustNew(t, srv.URL, srv.Client(), week).ListGroups(context.Background()); err == nil {
 		t.Fatal("a listing past the page cap must be an error")
 	}
-	if len(*calls) != maxPages {
-		t.Fatalf("want %d requests, got %d", maxPages, len(*calls))
+	if n != maxPages {
+		t.Fatalf("want %d requests, got %d", maxPages, n)
+	}
+}
+
+// A context the caller cancels ends the call before anything is sent.
+func TestCallsTakeTheCallersContext(t *testing.T) {
+	c, calls := fake(t, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := c.ListUsers(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("want context.Canceled, got %v", err)
+	}
+	if _, err := c.ListGroups(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("want context.Canceled, got %v", err)
+	}
+	if err := c.SetDisabled(ctx, "u1", true); !errors.Is(err, context.Canceled) {
+		t.Fatalf("want context.Canceled, got %v", err)
+	}
+	if len(*calls) != 0 {
+		t.Fatalf("a cancelled call sent %+v", *calls)
 	}
 }

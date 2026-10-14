@@ -134,6 +134,35 @@ func TestUpdateOfMissingUserWritesNothing(t *testing.T) {
 	}
 }
 
+// The update sends the admin flag back as read: an admin's update never
+// demotes them, and anyone else's never promotes them.
+func TestUpdateKeepsAdmin(t *testing.T) {
+	for _, admin := range []bool{true, false} {
+		var put map[string]any
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == "GET" {
+				u := stored()
+				u["isAdmin"] = admin
+				json.NewEncoder(w).Encode(u)
+				return
+			}
+			json.NewDecoder(r.Body).Decode(&put)
+		}))
+		c := mustNew(t, srv.URL, srv.Client(), week)
+		for _, set := range []func() error{
+			func() error { return c.SetDisabled(context.Background(), "u1", true) },
+			func() error { return c.SetEmail(context.Background(), "u1", "n@x.org") },
+			func() error { return c.SetName(context.Background(), "u1", idp.Name{DisplayName: "N"}) },
+		} {
+			put = nil
+			if err := set(); err != nil || put["isAdmin"] != admin {
+				t.Errorf("admin %v: sent isAdmin %v, %v", admin, put["isAdmin"], err)
+			}
+		}
+		srv.Close()
+	}
+}
+
 func TestGetUser(t *testing.T) {
 	c, _ := updateServer(t)
 	u, err := c.GetUser(context.Background(), "u1")

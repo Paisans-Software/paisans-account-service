@@ -180,6 +180,24 @@ func TestContractUpdate(t *testing.T) {
 	}
 	same(after, "displayName", "firstName", "lastName")
 
+	// An administrator's update keeps them one: the update goes back through
+	// pocketid-go's SetAdmin for a user read as an admin.
+	promoted := read()
+	promoted["isAdmin"] = true
+	api(t, base, key, http.MethodPut, "/api/users/"+u.ID, promoted, nil)
+	before = read()
+	if before["isAdmin"] != true {
+		t.Fatalf("not promoted for the test: %v", before)
+	}
+	if err := c.SetDisabled(ctx, u.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	after = read()
+	if after["isAdmin"] != true || after["disabled"] != true {
+		t.Fatalf("an admin's update changed the admin flag: %v", after)
+	}
+	same(after, "disabled")
+
 	if _, err := c.GetUser(ctx, "00000000-0000-0000-0000-00000000dead"); !errors.Is(err, idp.ErrNotFound) {
 		t.Fatalf("missing user: %v", err)
 	}

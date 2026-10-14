@@ -84,7 +84,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	provider, err := pocketid.New(cfg.IDPURL, cfg.IDPAPIKey, &http.Client{Timeout: 15 * time.Second}, time.Duration(cfg.LoginLinkDays)*24*time.Hour)
+	provider, err := pocketid.New(cfg.IDPURL, cfg.IDPAPIKey, &http.Client{Timeout: 15 * time.Second}, time.Duration(cfg.LoginLinkDays)*24*time.Hour, cfg.IDPNetworks...)
 	if err != nil {
 		return err
 	}

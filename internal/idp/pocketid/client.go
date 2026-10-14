@@ -1,16 +1,13 @@
 // Package pocketid is the only package that reaches the identity provider.
 // It is the service's adapter to the shared Pocket ID client,
-// github.com/paisans-software/pocketid-go, through which every request goes
-// except the group listing, which that client does not offer. Its write
-// surface is pinned by writesurface_test.go.
+// github.com/paisans-software/pocketid-go, through which every request goes.
+// Its write surface is pinned by writesurface_test.go.
 package pocketid
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/netip"
@@ -24,10 +21,6 @@ import (
 
 type Client struct {
 	api *pid.Client
-	// base, key and hc are for listGroups alone: the one request the shared
-	// client does not make. They are api's own values.
-	base, key string
-	hc        *http.Client
 	// linkTTL is the sign-in link's lifetime, a whole number of hours. Pocket
 	// ID accepts at most 744h; config.Load holds it to 1 to 31 days.
 	linkTTL time.Duration
@@ -35,17 +28,14 @@ type Client struct {
 
 var _ idp.Provider = (*Client)(nil)
 
-// maxPages bounds the group listing so a misbehaving server cannot hold a
-// request open.
-const maxPages = 100
-
 // maxLinkTTL is the longest sign-in link Pocket ID accepts.
 const maxLinkTTL = 744 * time.Hour
 
 // New refuses a base URL whose host is not private, as pocketid-go judges it
 // with networks, so the API key is never sent anywhere else; config.Load
-// refuses the same earlier, naming the variable. It copies hc so that a
-// redirect is an error: the key must never follow a 3xx to another place.
+// refuses the same earlier, naming the variable. It copies hc, so the caller
+// cannot change it afterwards; pocketid-go answers a redirect rather than
+// following it, so the key never follows a 3xx to another place.
 // linkTTL is the lifetime of every sign-in link the client sends: a whole
 // number of hours from 1h to 744h, or New refuses.
 func New(baseURL, apiKey string, hc *http.Client, linkTTL time.Duration, networks ...netip.Prefix) (*Client, error) {
@@ -63,11 +53,9 @@ func New(baseURL, apiKey string, hc *http.Client, linkTTL time.Duration, network
 	if hc != nil {
 		cp = *hc
 	}
-	cp.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	base := strings.TrimRight(baseURL, "/")
 	return &Client{
-		api:  &pid.Client{HTTP: &cp, BaseURL: base, APIKey: apiKey, Networks: networks},
-		base: base, key: apiKey, hc: &cp, linkTTL: linkTTL,
+		api:     &pid.Client{HTTP: &cp, BaseURL: strings.TrimRight(baseURL, "/"), APIKey: apiKey, Networks: networks},
+		linkTTL: linkTTL,
 	}, nil
 }
 
@@ -212,106 +200,51 @@ func (c *Client) GetUser(ctx context.Context, id string) (idp.User, error) {
 	return toUser(u), nil
 }
 
-// update reads the user and writes it back with change applied. Pocket ID's
-// update takes every field and sets each, so every field the caller does not
-// change goes back exactly as it was read. The shared client's two ways of
-// sending a user back as given are SetAdmin and Demote, which differ only in
-// the admin flag they set; the one matching the flag as read sends it back
-// unchanged.
-func (c *Client) update(ctx context.Context, id string, change func(*pid.User)) error {
-	cur, err := c.api.User(ctx, id)
-	if err != nil {
-		return wrap(err)
-	}
-	next := cur
-	change(&next)
-	if cur.IsAdmin {
-		err = c.api.SetAdmin(ctx, next)
-	} else {
-		err = c.api.Demote(ctx, next)
-	}
-	return wrap(err)
-}
+// SetDisabled, SetEmail and SetName each change only their own fields with
+// pocketid-go's UpdateUser, which reads the user and sends every other field
+// back as read: Pocket ID's update takes every field and sets each. The
+// username and the admin flag are not in a UserChange, so no update changes
+// them.
 
 func (c *Client) SetDisabled(ctx context.Context, id string, disabled bool) error {
-	if err := c.update(ctx, id, func(u *pid.User) { u.Disabled = disabled }); err != nil {
-		return err
+	if _, err := c.api.UpdateUser(ctx, id, pid.UserChange{Disabled: &disabled}); err != nil {
+		return wrap(err)
 	}
 	slog.Info("identity provider write", "action", "user.disabled", "user_id", id, "disabled", disabled)
 	return nil
 }
 
+// SetEmail sets the address and marks it verified: Pocket ID resets the
+// verification of a changed address unless the update sets it.
 func (c *Client) SetEmail(ctx context.Context, id, email string) error {
 	email = strings.TrimSpace(email)
-	if err := c.update(ctx, id, func(u *pid.User) { u.Email = &email; u.EmailVerified = true }); err != nil {
-		return err
+	verified := true
+	if _, err := c.api.UpdateUser(ctx, id, pid.UserChange{Email: &email, EmailVerified: &verified}); err != nil {
+		return wrap(err)
 	}
 	slog.Info("identity provider write", "action", "user.email", "user_id", id)
 	return nil
 }
 
 func (c *Client) SetName(ctx context.Context, id string, n idp.Name) error {
-	last := n.LastName
-	if err := c.update(ctx, id, func(u *pid.User) {
-		u.DisplayName = n.DisplayName
-		u.FirstName = n.FirstName
-		u.LastName = &last
-	}); err != nil {
-		return err
+	if _, err := c.api.UpdateUser(ctx, id, pid.UserChange{DisplayName: &n.DisplayName, FirstName: &n.FirstName, LastName: &n.LastName}); err != nil {
+		return wrap(err)
 	}
 	slog.Info("identity provider write", "action", "user.name", "user_id", id)
 	return nil
 }
 
-// listGroups returns every group, GET /api/user-groups page by page. It is
-// the one request this package makes itself, to the same private base URL
-// with the same key and client as api: the shared client finds a group only
-// by name, and the groups page and ChangeGroups need every group, a group
-// without members included.
+// listGroups returns every group, a group without members included.
 func (c *Client) listGroups(ctx context.Context) ([]idp.Group, error) {
-	var out []idp.Group
-	for page := 1; ; page++ {
-		if page > maxPages {
-			return nil, fmt.Errorf("identity provider GET /api/user-groups: more than %d pages", maxPages)
-		}
-		q := url.Values{"pagination[page]": {fmt.Sprint(page)}, "pagination[limit]": {"100"}}
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base+"/api/user-groups?"+q.Encode(), nil)
-		if err != nil {
-			return nil, wrap(err)
-		}
-		req.Header.Set("X-API-Key", c.key)
-		req.Header.Set("Accept", "application/json")
-		resp, err := c.hc.Do(req)
-		if err != nil {
-			return nil, wrap(fmt.Errorf("GET /api/user-groups: Pocket ID did not answer: %w", err))
-		}
-		var res struct {
-			Data       []pid.Group `json:"data"`
-			Pagination struct {
-				TotalPages int `json:"totalPages"`
-			} `json:"pagination"`
-		}
-		err = func() error {
-			defer resp.Body.Close()
-			if resp.StatusCode != http.StatusOK {
-				io.Copy(io.Discard, resp.Body)
-				return fmt.Errorf("identity provider GET /api/user-groups: status %d", resp.StatusCode)
-			}
-			if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
-				return fmt.Errorf("identity provider GET /api/user-groups: the response is not the JSON expected: %v", err)
-			}
-			return nil
-		}()
-		if err != nil {
-			return nil, err
-		}
-		for _, g := range res.Data {
-			out = append(out, toGroup(g))
-		}
-		if page >= res.Pagination.TotalPages || len(res.Data) == 0 {
-			return out, nil
-		}
+	gs, err := c.api.Groups(ctx)
+	if err != nil {
+		return nil, wrap(err)
 	}
+	out := make([]idp.Group, 0, len(gs))
+	for _, g := range gs {
+		out = append(out, toGroup(g))
+	}
+	return out, nil
 }
 
 // ListGroups returns every group, for the admins' groups page.

@@ -28,35 +28,39 @@ const (
 )
 
 var allowedImports = map[string]bool{
-	"context": true, "encoding/json": true, "errors": true, "fmt": true, "io": true,
+	"context": true, "errors": true, "fmt": true,
 	"log/slog": true, "net/http": true, "net/netip": true, "net/url": true, "strings": true, "time": true,
 	"github.com/paisans-software/paisans-account-service/internal/idp": true,
 	pidPath: true,
 }
 
 // pidTypes are the shared client's types the package may name.
-var pidTypes = map[string]bool{"Client": true, "User": true, "NewUser": true, "Group": true, "APIError": true}
+var pidTypes = map[string]bool{"Client": true, "User": true, "NewUser": true, "UserChange": true, "Group": true, "APIError": true}
 
 // pidReads are the shared client's methods that only read; any function may
 // call them.
-var pidReads = map[string]bool{"Users": true, "User": true, "FindGroup": true}
+var pidReads = map[string]bool{"Users": true, "User": true, "FindGroup": true, "Groups": true}
 
-// pidWrites is each shared-client method that writes, and the one function
-// that may call it, exactly once.
-var pidWrites = map[string]string{
-	"CreateUser":     "CreateUser",
-	"EmailLoginLink": "SendLoginLink",
-	"SetAdmin":       "update",
-	"Demote":         "update",
-	"SetUserGroups":  "ChangeGroups",
+// pidWrites is each shared-client method that writes, and the functions that
+// may call it, each exactly once.
+var pidWrites = map[string][]string{
+	"UpdateUser":     {"SetDisabled", "SetEmail", "SetName"},
+	"CreateUser":     {"CreateUser"},
+	"EmailLoginLink": {"SendLoginLink"},
+	"SetUserGroups":  {"ChangeGroups"},
 }
 
-// updateChanges is which function may assign which pid.User field. Every
-// other field goes back to Pocket ID as it was read.
-var updateChanges = map[string]map[string]bool{
-	"SetDisabled": {"Disabled": true},
-	"SetEmail":    {"Email": true, "EmailVerified": true},
-	"SetName":     {"DisplayName": true, "FirstName": true, "LastName": true},
+func isPidWrite(m string) bool { return pidWrites[m] != nil }
+
+// userChanges is the UserChange each caller of UpdateUser sends: its fields,
+// exactly, and the source of each, as "param.Field", "param", or "true" for a
+// local set once to true. Disabled is ban and lift's; Email goes only with
+// EmailVerified true, for an address change and a recovery; the names are the
+// name change's. Every other field of the user goes back as read.
+var userChanges = map[string]map[string]string{
+	"SetDisabled": {"Disabled": "disabled"},
+	"SetEmail":    {"Email": "email", "EmailVerified": "true"},
+	"SetName":     {"DisplayName": "n.DisplayName", "FirstName": "n.FirstName", "LastName": "n.LastName"},
 }
 
 func isNetHTTP(o types.Object) bool {
@@ -109,22 +113,22 @@ func selfNamed(t types.Type, pkg *types.Package) bool {
 }
 
 // The service is approved to make exactly four writes at the identity
-// provider: create a user, send a sign-in link, update a user, where the
-// update sends every field back as read and only SetDisabled, SetEmail and
-// SetName may change a field, each its own, and set a user's groups, where
-// ChangeGroups sends the list it has just read with only the requested
-// additions and removals, after checkGroups.
+// provider: create a user, send a sign-in link, update a user, where
+// pocketid-go's UpdateUser sends every field back as read except those its
+// UserChange sets, and set a user's groups, where ChangeGroups sends the list
+// it has just read with only the requested additions and removals, after
+// checkGroups.
 //
-// Every request goes through the shared client, pocketid-go, whose write
-// methods are named here, each callable from one function only; an update
-// goes through SetAdmin or Demote, chosen by the user's admin flag as read,
-// so the flag goes back unchanged. The one request the package builds itself
-// is the group listing, a GET. This test is type-checked, so a shadowed name or
-// a look-alike function cannot stand in for net/http or the shared client. It
-// fails on another write, on a write moved to another function, on any other
-// shared-client method or any other way of building or sending a request, on an
-// import that could open a connection by another route, on a changed path, and
-// on a body built from anything beyond the approved fields.
+// Every request goes through the one shared client, pocketid-go, built once in
+// New; the package builds and sends no request itself. Its write methods are
+// named in pidWrites, each callable only from the functions named there, and
+// each UserChange is pinned by userChanges, written in the call. This test is
+// type-checked, so a shadowed name or a look-alike function cannot stand in
+// for net/http or the shared client. It fails on another write, on a write
+// moved to another function, on a UserChange field set by another caller or
+// from another source, on any other shared-client method or any way of
+// building or sending a request, on an import that could open a connection by
+// another route, and on a body built from anything beyond the approved fields.
 // TestWriteSurfaceOnTheWire checks the same from outside, at the server.
 // A failure is a question for the founder, not a test to fix.
 func TestWriteSurface(t *testing.T) {
@@ -167,8 +171,10 @@ func TestWriteSurface(t *testing.T) {
 		"ListGroups": true, "UserGroups": true, "ChangeGroups": true}
 	httpWrites := map[string]int{}
 	pidCalls := map[string]int{}
-	requests, sends := map[string]int{}, map[string]int{}
 	selfLits, pidClientLits, newUserLits := 0, 0, 0
+	// changeLits are the UserChange literals written as the third argument
+	// of a c.api.UpdateUser call; no other is allowed.
+	changeLits := map[*ast.CompositeLit]bool{}
 	for _, file := range parsed {
 		for _, decl := range file.Decls {
 			owner := "<package>"
@@ -192,6 +198,11 @@ func TestWriteSurface(t *testing.T) {
 						if inner, ok := sel.X.(*ast.SelectorExpr); ok {
 							if v, ok := info.Uses[inner.Sel].(*types.Var); ok && v.IsField() && v.Name() == "api" && v.Pkg() == pkg {
 								okAPI[inner.Sel] = true
+								if sel.Sel.Name == "UpdateUser" && len(x.Args) == 3 {
+									if lit, ok := x.Args[2].(*ast.CompositeLit); ok {
+										changeLits[lit] = true
+									}
+								}
 							}
 						}
 					}
@@ -211,7 +222,7 @@ func TestWriteSurface(t *testing.T) {
 				case *ast.Ident:
 					obj := info.Uses[x]
 					if isNetHTTP(obj) {
-						checkHTTPUse(t, fset, x, obj, owner, httpWrites, requests, sends)
+						checkHTTPUse(t, fset, x, obj, owner, httpWrites)
 					}
 					if isPid(obj) {
 						checkPidUse(t, fset, x, obj, owner, calledSel[x], pidCalls)
@@ -235,7 +246,7 @@ func TestWriteSurface(t *testing.T) {
 						if owner != "New" {
 							t.Errorf("%s: a Client is built outside New", fset.Position(x.Pos()))
 						}
-						checkKeys(t, fset, x, "Client", "api", "base", "key", "hc", "linkTTL")
+						checkKeys(t, fset, x, "Client", "api", "linkTTL")
 					case pidNamed(tv) == "Client":
 						pidClientLits++
 						if owner != "New" {
@@ -246,7 +257,13 @@ func TestWriteSurface(t *testing.T) {
 					case pidNamed(tv) == "NewUser":
 						newUserLits++
 					case pidNamed(tv) == "User":
-						t.Errorf("%s: a pocketid-go User is built here; an update sends back the one it read", fset.Position(x.Pos()))
+						t.Errorf("%s: a pocketid-go User is built here; UpdateUser sends back the one it read", fset.Position(x.Pos()))
+					case pidNamed(tv) == "UserChange":
+						if !changeLits[x] {
+							t.Errorf("%s: a UserChange is built other than in a c.api.UpdateUser call", fset.Position(x.Pos()))
+						} else {
+							checkUserChange(t, fset, info, owner, x)
+						}
 					}
 				case *ast.CallExpr:
 					if id, ok := x.Fun.(*ast.Ident); ok && id.Name == "new" && len(x.Args) == 1 {
@@ -255,15 +272,11 @@ func TestWriteSurface(t *testing.T) {
 						}
 					}
 				case *ast.AssignStmt:
-					for i, l := range x.Lhs {
-						var rhs ast.Expr
-						if len(x.Lhs) == len(x.Rhs) {
-							rhs = x.Rhs[i]
-						}
-						checkAssign(t, fset, info, pkg, l, owner, rhs, x.Tok == token.ASSIGN)
+					for _, l := range x.Lhs {
+						checkAssign(t, fset, info, pkg, l)
 					}
 				case *ast.IncDecStmt:
-					checkAssign(t, fset, info, pkg, x.X, owner, nil, false)
+					checkAssign(t, fset, info, pkg, x.X)
 				case *ast.UnaryExpr:
 					if x.Op == token.AND {
 						if sel, ok := x.X.(*ast.SelectorExpr); ok {
@@ -280,15 +293,17 @@ func TestWriteSurface(t *testing.T) {
 	if len(httpWrites) != 0 {
 		t.Errorf("net/http write methods named: %v", httpWrites)
 	}
-	if !reflect.DeepEqual(requests, map[string]int{"listGroups": 1}) || !reflect.DeepEqual(sends, map[string]int{"listGroups": 1}) {
-		t.Errorf("the package must build and send exactly one request itself, in listGroups: built %v, sent %v", requests, sends)
-	}
 	want := map[string]int{}
-	for m, owner := range pidWrites {
-		want[owner+":"+m] = 1
+	for m, owners := range pidWrites {
+		for _, owner := range owners {
+			want[owner+":"+m] = 1
+		}
 	}
 	if !reflect.DeepEqual(pidCalls, want) {
 		t.Fatalf("write surface changed: got %v, want %v", pidCalls, want)
+	}
+	if len(changeLits) != len(userChanges) {
+		t.Fatalf("want one UserChange literal in each of %d UpdateUser calls, got %d", len(userChanges), len(changeLits))
 	}
 	if selfLits != 1 || pidClientLits != 1 || newUserLits != 1 {
 		t.Fatalf("want one Client, one pocketid-go Client and one NewUser literal, got %d, %d, %d", selfLits, pidClientLits, newUserLits)
@@ -305,8 +320,8 @@ func TestWriteSurface(t *testing.T) {
 				checkCreateUser(t, fn)
 			case "SendLoginLink":
 				checkSendLoginLink(t, fn, info)
-			case "update":
-				checkUpdateFunc(t, fn)
+			case "SetDisabled", "SetEmail", "SetName":
+				checkUpdateCaller(t, fn, info)
 			case "ChangeGroups":
 				checkChangeGroupsFunc(t, fn)
 			case "userGroups":
@@ -315,7 +330,10 @@ func TestWriteSurface(t *testing.T) {
 					t.Fatal("userGroups must be one c.api.User(ctx, id)")
 				}
 			case "listGroups":
-				checkListGroups(t, fn, info)
+				calls := apiCalls(fn)
+				if len(calls) != 1 || apiMethod(calls[0]) != "Groups" || !argsAre(calls[0], paramName(fn, 0)) {
+					t.Fatal("listGroups must be one c.api.Groups(ctx)")
+				}
 			}
 		}
 	}
@@ -343,7 +361,8 @@ func checkKeys(t *testing.T, fset *token.FileSet, lit *ast.CompositeLit, what st
 }
 
 // checkHTTPUse judges a use of something from net/http.
-func checkHTTPUse(t *testing.T, fset *token.FileSet, id *ast.Ident, obj types.Object, owner string, writes, requests, sends map[string]int) {
+// The package builds and sends no request itself.
+func checkHTTPUse(t *testing.T, fset *token.FileSet, id *ast.Ident, obj types.Object, owner string, writes map[string]int) {
 	pos := fset.Position(id.Pos())
 	switch o := obj.(type) {
 	case *types.Const:
@@ -357,14 +376,12 @@ func checkHTTPUse(t *testing.T, fset *token.FileSet, id *ast.Ident, obj types.Ob
 	case *types.Func:
 		recv := recvName(o)
 		switch {
-		case recv == "" && o.Name() == "NewRequestWithContext":
-			requests[owner]++
-		case recv == "" && o.Name() == "NewRequest":
-			t.Errorf("%s: http.NewRequest; listGroups builds its one request with a context", pos)
+		case recv == "" && (o.Name() == "NewRequestWithContext" || o.Name() == "NewRequest"):
+			t.Errorf("%s: http.%s; every request goes through pocketid-go", pos, o.Name())
 		case recv == "" && (o.Name() == "Get" || o.Name() == "Post" || o.Name() == "PostForm" || o.Name() == "Head"):
 			t.Errorf("%s: http.%s is a request shortcut", pos, o.Name())
 		case recv == "Client" && o.Name() == "Do":
-			sends[owner]++
+			t.Errorf("%s: (*http.Client).Do; every request goes through pocketid-go", pos)
 		case recv == "Client" && (o.Name() == "Get" || o.Name() == "Post" || o.Name() == "PostForm" || o.Name() == "Head"):
 			t.Errorf("%s: (*http.Client).%s is a request shortcut", pos, o.Name())
 		case o.Name() == "RoundTrip":
@@ -392,11 +409,11 @@ func checkPidUse(t *testing.T, fset *token.FileSet, id *ast.Ident, obj types.Obj
 		switch {
 		case recv == "" && o.Name() == "Private":
 		case recv == "User" && o.Name() == "InGroup":
-		case recv == "Client" && (pidReads[o.Name()] || pidWrites[o.Name()] != ""):
+		case recv == "Client" && (pidReads[o.Name()] || isPidWrite(o.Name())):
 			if !called {
 				t.Errorf("%s: (*pocketid.Client).%s used other than by calling it", pos, o.Name())
 			}
-			if pidWrites[o.Name()] != "" {
+			if isPidWrite(o.Name()) {
 				calls[owner+":"+o.Name()]++
 			}
 		default:
@@ -408,10 +425,10 @@ func checkPidUse(t *testing.T, fset *token.FileSet, id *ast.Ident, obj types.Obj
 }
 
 // checkAssign fails on any assignment to a field of the package's own Client
-// or the shared client's Client or NewUser, on a pid.User field except as
-// updateChanges allows (EmailVerified only to the literal true), and on any
-// assignment through a pointer to a shared-client value.
-func checkAssign(t *testing.T, fset *token.FileSet, info *types.Info, pkg *types.Package, lhs ast.Expr, owner string, rhs ast.Expr, plain bool) {
+// or of any of the shared client's types, and on any assignment through a
+// pointer to one: the user UpdateUser sends is the one it read, changed only
+// by the UserChange.
+func checkAssign(t *testing.T, fset *token.FileSet, info *types.Info, pkg *types.Package, lhs ast.Expr) {
 	pos := fset.Position(lhs.Pos())
 	if star, ok := lhs.(*ast.StarExpr); ok {
 		if pidNamed(info.Types[star].Type) != "" || selfNamed(info.Types[star].Type, pkg) {
@@ -434,16 +451,6 @@ func checkAssign(t *testing.T, fset *token.FileSet, info *types.Info, pkg *types
 	switch {
 	case selfNamed(s.Recv(), pkg):
 		t.Errorf("%s: Client.%s assigned outside its literal in New", pos, v.Name())
-	case pidNamed(s.Recv()) == "User":
-		if !plain || !updateChanges[owner][v.Name()] {
-			t.Errorf("%s: pocketid-go User.%s changed in %s", pos, v.Name(), owner)
-			return
-		}
-		if v.Name() == "EmailVerified" {
-			if id, ok := rhs.(*ast.Ident); !ok || id.Name != "true" {
-				t.Errorf("%s: EmailVerified may only be set to true", pos)
-			}
-		}
 	case pidNamed(s.Recv()) != "":
 		t.Errorf("%s: pocketid-go %s.%s assigned", pos, pidNamed(s.Recv()), v.Name())
 	}
@@ -621,117 +628,152 @@ func checkSendLoginLink(t *testing.T, fn *ast.FuncDecl, info *types.Info) {
 	}
 }
 
-// checkUpdateFunc requires update to be exactly:
-//
-//	cur, err := c.api.User(ctx, id)
-//	if err != nil { return ... }
-//	next := cur
-//	change(&next)
-//	if cur.IsAdmin { err = c.api.SetAdmin(ctx, next) } else { err = c.api.Demote(ctx, next) }
-//	return ...
-//
-// so it writes back the user it read, changed only by change, with the admin
-// flag as read: SetAdmin and Demote each send the user as given with only
-// that flag set.
-func checkUpdateFunc(t *testing.T, fn *ast.FuncDecl) {
+// checkUpdateCaller requires SetDisabled, SetEmail and SetName each to make
+// one call, c.api.UpdateUser(ctx, id, pid.UserChange{...}), with the
+// function's own context and ID and the UserChange written in the call;
+// checkUserChange judges the literal. Each variable the literal points into is
+// assigned only as approved, and its address is taken only in the literal, so
+// nothing can change what is sent after the literal is checked.
+func checkUpdateCaller(t *testing.T, fn *ast.FuncDecl, info *types.Info) {
 	t.Helper()
-	ctx, id, change := paramName(fn, 0), paramName(fn, 1), paramName(fn, 2)
-	body := fn.Body.List
-	fail := func(what string) { t.Fatalf("update must be, statement for statement: %s", what) }
-	if len(body) != 6 {
-		fail("six statements")
+	name := fn.Name.Name
+	calls := apiCalls(fn)
+	if len(calls) != 1 || apiMethod(calls[0]) != "UpdateUser" || len(calls[0].Args) != 3 ||
+		!isIdent(calls[0].Args[0], paramName(fn, 0)) || !isIdent(calls[0].Args[1], paramName(fn, 1)) {
+		t.Fatalf("%s must make exactly one call, c.api.UpdateUser(ctx, id, pid.UserChange{...})", name)
 	}
-	as, ok := body[0].(*ast.AssignStmt)
-	if !ok || as.Tok != token.DEFINE || len(as.Lhs) != 2 || len(as.Rhs) != 1 || !isIdent(as.Lhs[0], "cur") ||
-		apiMethod(as.Rhs[0]) != "User" || !argsAre(as.Rhs[0].(*ast.CallExpr), ctx, id) {
-		fail("cur, err := c.api.User(ctx, id)")
+	if _, ok := calls[0].Args[2].(*ast.CompositeLit); !ok {
+		t.Fatalf("%s's UserChange must be a literal written in the call", name)
 	}
-	if is, ok := body[1].(*ast.IfStmt); !ok || is.Init != nil || is.Else != nil || len(is.Body.List) != 1 {
-		fail("if err != nil { return ... }")
-	} else if _, ok := is.Body.List[0].(*ast.ReturnStmt); !ok {
-		fail("if err != nil { return ... }")
+	param := paramName(fn, 2)
+	// approved is how each variable the UserChange points into may be
+	// assigned: the parameter only by SetEmail's trim, verified only once,
+	// to true.
+	approved := map[string]func(*ast.AssignStmt, int) bool{
+		param: func(as *ast.AssignStmt, i int) bool {
+			if name != "SetEmail" || as.Tok != token.ASSIGN || len(as.Rhs) != len(as.Lhs) {
+				return false
+			}
+			c, ok := as.Rhs[i].(*ast.CallExpr)
+			return ok && len(c.Args) == 1 && isSel(c.Fun, "strings", "TrimSpace") && isIdent(c.Args[0], param)
+		},
+		"verified": func(as *ast.AssignStmt, i int) bool {
+			if name != "SetEmail" || as.Tok != token.DEFINE || len(as.Rhs) != len(as.Lhs) {
+				return false
+			}
+			id, ok := as.Rhs[i].(*ast.Ident)
+			return ok && id.Name == "true" && info.Uses[id] == types.Universe.Lookup("true")
+		},
 	}
-	if as, ok := body[2].(*ast.AssignStmt); !ok || as.Tok != token.DEFINE || len(as.Lhs) != 1 || len(as.Rhs) != 1 || !isIdent(as.Lhs[0], "next") || !isIdent(as.Rhs[0], "cur") {
-		fail("next := cur")
-	}
-	es, ok := body[3].(*ast.ExprStmt)
-	call, _ := func() (*ast.CallExpr, bool) {
-		if !ok {
-			return nil, false
+	assigned := map[string]int{}
+	addrs := 0
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.AssignStmt:
+			for i, l := range x.Lhs {
+				root := rootIdent(l)
+				if root == "" {
+					continue
+				}
+				if ok := approved[root]; ok != nil {
+					assigned[root]++
+					if !ok(x, i) {
+						t.Errorf("%s assigns %s other than as approved", name, root)
+					}
+				}
+			}
+		case *ast.IncDecStmt:
+			if r := rootIdent(x.X); r == param || r == "verified" {
+				t.Errorf("%s changes %s", name, r)
+			}
+		case *ast.UnaryExpr:
+			if r := rootIdent(x.X); x.Op == token.AND && (r == param || r == "verified") {
+				addrs++
+			}
 		}
-		c, ok := es.X.(*ast.CallExpr)
-		return c, ok
-	}()
-	if call == nil || !isIdent(call.Fun, change) || len(call.Args) != 1 {
-		fail("change(&next)")
+		return true
+	})
+	if want := len(userChanges[name]); addrs != want {
+		t.Fatalf("%s takes the address of %s or verified %d times; only the UserChange's %d fields may", name, param, addrs, want)
 	}
-	if ue, ok := call.Args[0].(*ast.UnaryExpr); !ok || ue.Op != token.AND || !isIdent(ue.X, "next") {
-		fail("change(&next)")
+	if name == "SetEmail" && (assigned[param] != 1 || assigned["verified"] != 1) {
+		t.Fatalf("SetEmail must trim %s once and set verified once, to true", param)
 	}
-	is, ok := body[4].(*ast.IfStmt)
-	if !ok || is.Init != nil || !isSel(is.Cond, "cur", "IsAdmin") || len(is.Body.List) != 1 {
-		fail("if cur.IsAdmin { err = c.api.SetAdmin(ctx, next) } else { ... }")
+	if name != "SetEmail" && (assigned[param] != 0 || assigned["verified"] != 0) {
+		t.Fatalf("%s must not assign %s", name, param)
 	}
-	branch := func(st ast.Stmt, method string) bool {
-		as, ok := st.(*ast.AssignStmt)
-		return ok && as.Tok == token.ASSIGN && len(as.Lhs) == 1 && len(as.Rhs) == 1 && isIdent(as.Lhs[0], "err") &&
-			apiMethod(as.Rhs[0]) == method && argsAre(as.Rhs[0].(*ast.CallExpr), ctx, "next")
+}
+
+// checkUserChange requires a UserChange literal to set exactly the fields
+// userChanges gives its function, each from its approved source: &param,
+// &param.Field, or &verified for "true".
+func checkUserChange(t *testing.T, fset *token.FileSet, info *types.Info, owner string, lit *ast.CompositeLit) {
+	t.Helper()
+	pos := fset.Position(lit.Pos())
+	want, ok := userChanges[owner]
+	if !ok {
+		t.Errorf("%s: %s may not send a UserChange", pos, owner)
+		return
 	}
-	els, ok := is.Else.(*ast.BlockStmt)
-	if !branch(is.Body.List[0], "SetAdmin") || !ok || len(els.List) != 1 || !branch(els.List[0], "Demote") {
-		fail("if cur.IsAdmin { err = c.api.SetAdmin(ctx, next) } else { err = c.api.Demote(ctx, next) }")
+	got := map[string]bool{}
+	for _, el := range lit.Elts {
+		kv, ok := el.(*ast.KeyValueExpr)
+		if !ok {
+			t.Errorf("%s: the UserChange literal must use keyed fields", pos)
+			return
+		}
+		key := kv.Key.(*ast.Ident).Name
+		got[key] = true
+		src, ok := want[key]
+		if !ok {
+			t.Errorf("%s: %s may not set UserChange.%s", pos, owner, key)
+			continue
+		}
+		ue, ok := kv.Value.(*ast.UnaryExpr)
+		if !ok || ue.Op != token.AND {
+			t.Errorf("%s: UserChange.%s must be &%s", pos, key, src)
+			continue
+		}
+		var good bool
+		switch {
+		case src == "true":
+			good = isIdent(ue.X, "verified")
+		case strings.Contains(src, "."):
+			x, f, _ := strings.Cut(src, ".")
+			good = isSel(ue.X, x, f)
+		default:
+			good = isIdent(ue.X, src)
+		}
+		if !good {
+			t.Errorf("%s: UserChange.%s in %s must come from %s", pos, key, owner, src)
+		}
 	}
-	if _, ok := body[5].(*ast.ReturnStmt); !ok {
-		fail("return ...")
+	if len(got) != len(want) {
+		t.Errorf("%s: %s's UserChange sets %v, want exactly the fields of %v", pos, owner, got, want)
+	}
+}
+
+// rootIdent is the name x for an expression x, x.f, x.f.g or x[i], or "".
+func rootIdent(e ast.Expr) string {
+	for {
+		switch x := e.(type) {
+		case *ast.Ident:
+			return x.Name
+		case *ast.SelectorExpr:
+			e = x.X
+		case *ast.IndexExpr:
+			e = x.X
+		case *ast.ParenExpr:
+			e = x.X
+		default:
+			return ""
+		}
 	}
 }
 
 func isIdent(e ast.Expr, name string) bool {
 	id, ok := e.(*ast.Ident)
 	return ok && name != "" && id.Name == name
-}
-
-// checkListGroups requires listGroups's one request to be a GET of
-// c.base + "/api/user-groups?" + q.Encode().
-func checkListGroups(t *testing.T, fn *ast.FuncDecl, info *types.Info) {
-	t.Helper()
-	n := 0
-	ast.Inspect(fn, func(x ast.Node) bool {
-		c, ok := x.(*ast.CallExpr)
-		if !ok {
-			return true
-		}
-		sel, ok := c.Fun.(*ast.SelectorExpr)
-		if !ok {
-			return true
-		}
-		if f, ok := info.Uses[sel.Sel].(*types.Func); !ok || !isNetHTTP(f) || f.Name() != "NewRequestWithContext" {
-			return true
-		}
-		n++
-		if len(c.Args) != 4 || !isIdent(c.Args[0], paramName(fn, 0)) || !isIdent(c.Args[3], "nil") {
-			t.Fatal("listGroups must build its request with its own context and no body")
-		}
-		m, ok := c.Args[1].(*ast.SelectorExpr)
-		if !ok {
-			t.Fatal("listGroups's request must be http.MethodGet, written in place")
-		}
-		if k, ok := info.Uses[m.Sel].(*types.Const); !ok || !isNetHTTP(k) || k.Name() != "MethodGet" {
-			t.Fatal("listGroups's request must be http.MethodGet, written in place")
-		}
-		outer, ok := c.Args[2].(*ast.BinaryExpr)
-		if !ok || outer.Op != token.ADD {
-			t.Fatal(`listGroups's URL must be c.base + "/api/user-groups?" + q.Encode()`)
-		}
-		inner, ok := outer.X.(*ast.BinaryExpr)
-		if !ok || inner.Op != token.ADD || !isSel(inner.X, recvIdent(fn), "base") || !isStr(inner.Y, "/api/user-groups?") {
-			t.Fatal(`listGroups's URL must be c.base + "/api/user-groups?" + q.Encode()`)
-		}
-		return true
-	})
-	if n != 1 {
-		t.Fatalf("listGroups must build exactly one request, builds %d", n)
-	}
 }
 
 // groupAPI is a Pocket ID holding the groups in all and one user, u1, in the
@@ -1028,7 +1070,8 @@ func checkChangeGroupsFunc(t *testing.T, fn *ast.FuncDecl) {
 }
 
 // approvedRoutes are every request the service may make at Pocket ID, by
-// method and route, with :id for a path segment.
+// method and route, with :id for a path segment. Groups is the GET of
+// /api/user-groups; UpdateUser is a GET and a PUT of /api/users/:id.
 var approvedRoutes = map[string]bool{
 	"GET /api/users":                            true,
 	"GET /api/users/:id":                        true,
@@ -1048,13 +1091,13 @@ func route(method, path string) string {
 	return method + " " + strings.Join(parts, "/")
 }
 
-// Every exported method, driven against a recording Pocket ID, makes only
-// approved requests, each with the key, and writes exactly what it is
-// approved to: one POST each for CreateUser and SendLoginLink, one PUT each
-// for SetDisabled, SetEmail, SetName and ChangeGroups, and nothing for the
-// rest. This holds whatever the shared client does inside, so a new
-// pocketid-go that sends something else fails here. A failure is a question
-// for the founder, not a test to fix.
+// Every exported method, driven against a recording Pocket ID, makes exactly
+// the requests listed for it, each approved and each with the key: one POST
+// each for CreateUser and SendLoginLink, one PUT each for SetDisabled,
+// SetEmail, SetName and ChangeGroups, and nothing but reads for the rest. This
+// holds whatever the shared client does inside, so a new pocketid-go that
+// sends something else fails here. A failure is a question for the founder,
+// not a test to fix.
 func TestWriteSurfaceOnTheWire(t *testing.T) {
 	var calls []call
 	user := map[string]any{"id": "u1", "username": "bob", "email": "bob@x.org", "displayName": "Bob", "firstName": "Bob",
@@ -1083,28 +1126,35 @@ func TestWriteSurfaceOnTheWire(t *testing.T) {
 	t.Cleanup(srv.Close)
 	c := mustNew(t, srv.URL, srv.Client(), week)
 	ctx := context.Background()
+	const (
+		users   = "GET /api/users"
+		user1   = "GET /api/users/:id"
+		groups  = "GET /api/user-groups"
+		update  = user1 + ";PUT /api/users/:id"
+		setGrps = "PUT /api/users/:id/user-groups"
+	)
 	for _, m := range []struct {
-		name   string
-		writes string
-		run    func() error
+		name     string
+		requests string
+		run      func() error
 	}{
-		{"UsernameTaken", "", func() error { _, err := c.UsernameTaken(ctx, "bob"); return err }},
-		{"EmailTaken", "", func() error { _, err := c.EmailTaken(ctx, "bob@x.org"); return err }},
-		{"FindUser", "", func() error { _, _, err := c.FindUser(ctx, "bob"); return err }},
-		{"AdminGroupEmails", "", func() error { _, err := c.AdminGroupEmails(ctx, "admins"); return err }},
-		{"ListUsers", "", func() error { _, err := c.ListUsers(ctx); return err }},
-		{"GetUser", "", func() error { _, err := c.GetUser(ctx, "u1"); return err }},
-		{"ListGroups", "", func() error { _, err := c.ListGroups(ctx); return err }},
-		{"UserGroups", "", func() error { _, err := c.UserGroups(ctx, "u1"); return err }},
+		{"UsernameTaken", users, func() error { _, err := c.UsernameTaken(ctx, "bob"); return err }},
+		{"EmailTaken", users, func() error { _, err := c.EmailTaken(ctx, "bob@x.org"); return err }},
+		{"FindUser", users, func() error { _, _, err := c.FindUser(ctx, "bob"); return err }},
+		{"AdminGroupEmails", groups + ";" + users, func() error { _, err := c.AdminGroupEmails(ctx, "admins"); return err }},
+		{"ListUsers", users, func() error { _, err := c.ListUsers(ctx); return err }},
+		{"GetUser", user1, func() error { _, err := c.GetUser(ctx, "u1"); return err }},
+		{"ListGroups", groups, func() error { _, err := c.ListGroups(ctx); return err }},
+		{"UserGroups", user1, func() error { _, err := c.UserGroups(ctx, "u1"); return err }},
 		{"CreateUser", "POST /api/users", func() error {
 			_, err := c.CreateUser(ctx, idp.NewUser{Username: "ann", Email: "ann@x.org", DisplayName: "Ann"})
 			return err
 		}},
 		{"SendLoginLink", "POST /api/users/:id/one-time-access-email", func() error { return c.SendLoginLink(ctx, "u1") }},
-		{"SetDisabled", "PUT /api/users/:id", func() error { return c.SetDisabled(ctx, "u1", true) }},
-		{"SetEmail", "PUT /api/users/:id", func() error { return c.SetEmail(ctx, "u1", "new@x.org") }},
-		{"SetName", "PUT /api/users/:id", func() error { return c.SetName(ctx, "u1", idp.Name{DisplayName: "B"}) }},
-		{"ChangeGroups", "PUT /api/users/:id/user-groups", func() error {
+		{"SetDisabled", update, func() error { return c.SetDisabled(ctx, "u1", true) }},
+		{"SetEmail", update, func() error { return c.SetEmail(ctx, "u1", "new@x.org") }},
+		{"SetName", update, func() error { return c.SetName(ctx, "u1", idp.Name{DisplayName: "B"}) }},
+		{"ChangeGroups", groups + ";" + user1 + ";" + setGrps + ";" + user1, func() error {
 			_, err := c.ChangeGroups(ctx, "u1", []string{"g-members"}, nil)
 			return err
 		}},
@@ -1114,7 +1164,7 @@ func TestWriteSurfaceOnTheWire(t *testing.T) {
 			t.Errorf("%s: %v", m.name, err)
 			continue
 		}
-		var writes []string
+		var got []string
 		for _, k := range calls {
 			r := route(k.Method, k.Path)
 			if !approvedRoutes[r] {
@@ -1123,12 +1173,10 @@ func TestWriteSurfaceOnTheWire(t *testing.T) {
 			if k.Key != "KEY" {
 				t.Errorf("%s: %s without the key", m.name, r)
 			}
-			if k.Method != "GET" {
-				writes = append(writes, r)
-			}
+			got = append(got, r)
 		}
-		if strings.Join(writes, ";") != m.writes {
-			t.Errorf("%s: writes %v, want %q", m.name, writes, m.writes)
+		if strings.Join(got, ";") != m.requests {
+			t.Errorf("%s: requests %v, want %q", m.name, got, m.requests)
 		}
 	}
 }

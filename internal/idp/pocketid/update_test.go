@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/paisans-software/paisans-account-service/internal/idp"
@@ -116,6 +117,7 @@ func TestUpdateSendsNullsBack(t *testing.T) {
 		if body["lastName"] != "" || body["email"] != nil || body["locale"] != nil {
 			t.Errorf("nulls not sent back: %v", body)
 		}
+		json.NewEncoder(w).Encode(body)
 	}))
 	defer srv.Close()
 	if err := mustNew(t, srv.URL, srv.Client(), week).SetDisabled(context.Background(), "u1", true); err != nil {
@@ -134,6 +136,33 @@ func TestUpdateOfMissingUserWritesNothing(t *testing.T) {
 	}
 }
 
+// A user an LDAP sync manages is refused before anything is written: Pocket ID
+// would take only a locale from the update and answer as if it had worked.
+func TestUpdateRefusesLDAPUser(t *testing.T) {
+	var methods []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		methods = append(methods, r.Method)
+		u := stored()
+		u["ldapId"] = "cn=bob"
+		json.NewEncoder(w).Encode(u)
+	}))
+	defer srv.Close()
+	c := mustNew(t, srv.URL, srv.Client(), week)
+	for name, set := range map[string]func() error{
+		"SetDisabled": func() error { return c.SetDisabled(context.Background(), "u1", true) },
+		"SetEmail":    func() error { return c.SetEmail(context.Background(), "u1", "n@x.org") },
+		"SetName":     func() error { return c.SetName(context.Background(), "u1", idp.Name{DisplayName: "N"}) },
+	} {
+		methods = nil
+		if err := set(); err == nil {
+			t.Errorf("%s: an LDAP user's update must be refused", name)
+		}
+		if strings.Join(methods, ",") != "GET" {
+			t.Errorf("%s: want one read and no write, got %v", name, methods)
+		}
+	}
+}
+
 // The update sends the admin flag back as read: an admin's update never
 // demotes them, and anyone else's never promotes them.
 func TestUpdateKeepsAdmin(t *testing.T) {
@@ -147,6 +176,7 @@ func TestUpdateKeepsAdmin(t *testing.T) {
 				return
 			}
 			json.NewDecoder(r.Body).Decode(&put)
+			json.NewEncoder(w).Encode(put)
 		}))
 		c := mustNew(t, srv.URL, srv.Client(), week)
 		for _, set := range []func() error{

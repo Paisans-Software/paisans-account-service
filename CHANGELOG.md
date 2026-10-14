@@ -7,7 +7,7 @@ All notable changes to this project are documented here, in the
 
 ### Changed
 
-- The service calls Pocket ID through the shared pocketid-go client, which sends the API key only to a private address.
+- The service calls Pocket ID only through the shared pocketid-go client, which sends the API key only to a private address and never follows a redirect.
 - ACCOUNT_IDP_URL must be a private address, such as the site's mesh address; a public one stops the service at startup, naming the variable.
 - Pages and mail send members to Pocket ID at ACCOUNT_OIDC_ISSUER, its public URL, instead of ACCOUNT_IDP_URL.
 

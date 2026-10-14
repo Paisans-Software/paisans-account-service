@@ -10,7 +10,7 @@ paisans-account-service is the community's account service, a small Go service r
 
 Every admin action is an audit entry. No log line carries an address or a code.
 
-It calls Pocket ID's API through [pocketid-go](https://github.com/Paisans-Software/pocketid-go), the client the Paisans CLI uses, except the group listing, which pocketid-go does not offer and the service requests itself from the same address. The key goes only to a private address: loopback, RFC 1918, RFC 6598, IPv6 unique local, a network in `ACCOUNT_IDP_PRIVATE_NETWORKS`, or a hostname without a dot. A hostname with a dot is refused even when it resolves to a private address.
+It calls Pocket ID's API through [pocketid-go](https://github.com/Paisans-Software/pocketid-go), the client the Paisans CLI uses, and only through it. The key goes only to a private address: loopback, RFC 1918, RFC 6598, IPv6 unique local, a network in `ACCOUNT_IDP_PRIVATE_NETWORKS`, or a hostname without a dot. A hostname with a dot is refused even when it resolves to a private address. A redirect from Pocket ID is an error and is never followed.
 
 It answers on two hosts, each registering only its own routes; a route requested on the other host is a 404:
 
@@ -53,6 +53,6 @@ The session cookie has no `Domain`, so the join host never holds a session. `/i/
 
 Run the tests: `ACCOUNT_TEST_DATABASE_URL=postgres://… go test ./...`
 
-`internal/idp/pocketid/writesurface_test.go` pins what the service may write at Pocket ID: creating a user, sending a sign-in link, updating a user's address, name or disabled state, and changing their groups. A failure there is a question for the founder, not a test to fix.
+`internal/idp/pocketid/writesurface_test.go` pins what the service may write at Pocket ID: creating a user, sending a sign-in link, updating a user, and changing their groups. An update changes only its own fields: a ban or its lifting the disabled state, an address change or a recovery the address, always marked verified, and a name change the display, first and last name. The username, the admin flag and the groups go back as read. A failure there is a question for the founder, not a test to fix.
 
 The contract test runs against a real Pocket ID and Mailpit, as `.github/workflows/contract.yml` starts them: `go test -tags contract -run Contract ./internal/idp/pocketid/`. It creates users, so each run needs a fresh Pocket ID.

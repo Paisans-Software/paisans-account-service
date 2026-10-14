@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/paisans-software/paisans-account-service/internal/idp"
+	pid "github.com/paisans-software/pocketid-go"
 )
 
 const week = 7 * 24 * time.Hour
@@ -317,38 +318,63 @@ func TestTransportErrorsDoNotEchoQuery(t *testing.T) {
 	check(err)
 }
 
-func TestRedirectIsAnError(t *testing.T) {
-	followed := false
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/elsewhere" {
-			followed = true
-			return
+// Every exported method, answered with a redirect of any kind, fails with
+// pocketid-go's *APIError carrying the 3xx, and nothing is sent to the
+// redirect's target: following it would take the key to an address the
+// private check never saw.
+func TestRedirectIsAnErrorAndNotFollowed(t *testing.T) {
+	var followed []string
+	elsewhere := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		followed = append(followed, r.Method+" "+r.URL.Path+" key="+r.Header.Get("X-API-Key"))
+	}))
+	defer elsewhere.Close()
+	for _, status := range []int{301, 302, 303, 307, 308} {
+		var sent []string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			sent = append(sent, r.Method+" "+r.URL.Path)
+			http.Redirect(w, r, elsewhere.URL+r.URL.Path, status)
+		}))
+		c := mustNew(t, srv.URL, srv.Client(), week)
+		ctx := context.Background()
+		for _, m := range []struct {
+			name string
+			run  func() error
+		}{
+			{"UsernameTaken", func() error { _, err := c.UsernameTaken(ctx, "bob"); return err }},
+			{"EmailTaken", func() error { _, err := c.EmailTaken(ctx, "bob@x.org"); return err }},
+			{"FindUser", func() error { _, _, err := c.FindUser(ctx, "bob"); return err }},
+			{"AdminGroupEmails", func() error { _, err := c.AdminGroupEmails(ctx, "admins"); return err }},
+			{"ListUsers", func() error { _, err := c.ListUsers(ctx); return err }},
+			{"GetUser", func() error { _, err := c.GetUser(ctx, "u1"); return err }},
+			{"ListGroups", func() error { _, err := c.ListGroups(ctx); return err }},
+			{"UserGroups", func() error { _, err := c.UserGroups(ctx, "u1"); return err }},
+			{"CreateUser", func() error {
+				_, err := c.CreateUser(ctx, idp.NewUser{Username: "ann", Email: "ann@x.org", DisplayName: "Ann"})
+				return err
+			}},
+			{"SendLoginLink", func() error { return c.SendLoginLink(ctx, "u1") }},
+			{"SetDisabled", func() error { return c.SetDisabled(ctx, "u1", true) }},
+			{"SetEmail", func() error { return c.SetEmail(ctx, "u1", "new@x.org") }},
+			{"SetName", func() error { return c.SetName(ctx, "u1", idp.Name{DisplayName: "B"}) }},
+			{"ChangeGroups", func() error { _, err := c.ChangeGroups(ctx, "u1", []string{"g"}, nil); return err }},
+		} {
+			sent = nil
+			err := m.run()
+			var ae *pid.APIError
+			if !errors.As(err, &ae) || ae.Status != status {
+				t.Errorf("%d %s: want an *APIError with status %d, got %v", status, m.name, status, err)
+			}
+			if errors.Is(err, idp.ErrNotFound) {
+				t.Errorf("%d %s: a redirect reads as not found", status, m.name)
+			}
+			if len(sent) != 1 {
+				t.Errorf("%d %s: want the one request that was redirected, sent %v", status, m.name, sent)
+			}
 		}
-		http.Redirect(w, r, "/elsewhere", http.StatusFound)
-	}))
-	defer srv.Close()
-	if _, err := mustNew(t, srv.URL, srv.Client(), week).EmailTaken(context.Background(), "a@x.org"); err == nil {
-		t.Fatal("a 302 must be an error")
+		srv.Close()
 	}
-	if followed {
-		t.Fatal("the redirect target was requested")
-	}
-}
-
-// The group listing, the one request the package makes itself, stops at a
-// page cap so a misbehaving server cannot hold a request open.
-func TestGroupListingIsCapped(t *testing.T) {
-	n := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		n++
-		json.NewEncoder(w).Encode(map[string]any{"data": groupsNamed(fmt.Sprint("g", n)), "pagination": map[string]any{"totalPages": maxPages + 1}})
-	}))
-	defer srv.Close()
-	if _, err := mustNew(t, srv.URL, srv.Client(), week).ListGroups(context.Background()); err == nil {
-		t.Fatal("a listing past the page cap must be an error")
-	}
-	if n != maxPages {
-		t.Fatalf("want %d requests, got %d", maxPages, n)
+	if len(followed) != 0 {
+		t.Fatalf("the redirect target was requested: %v", followed)
 	}
 }
 

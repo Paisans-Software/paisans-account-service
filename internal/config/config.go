@@ -1,5 +1,5 @@
 // Package config reads the service's environment. The variable names are the
-// contract with paisans-stack's `account` blueprint.
+// contract with the Paisans toolkit's `account` blueprint.
 package config
 
 import (

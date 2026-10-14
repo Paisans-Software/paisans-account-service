@@ -5,6 +5,8 @@ All notable changes to this project are documented here, in the
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-14
+
 ### Changed
 
 - The service calls Pocket ID only through the shared pocketid-go client, which sends the API key only to a private address and never follows a redirect.

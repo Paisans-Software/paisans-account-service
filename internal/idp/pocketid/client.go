@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/paisans-software/paisans-invite/internal/idp"
+	"github.com/paisans-software/paisans-account-service/internal/idp"
 )
 
 type Client struct {
@@ -60,18 +60,54 @@ func withoutURL(err error) error {
 }
 
 type userDTO struct {
-	ID       string  `json:"id"`
-	Username string  `json:"username"`
-	Email    *string `json:"email"`
-	Disabled bool    `json:"disabled"`
+	ID          string  `json:"id"`
+	Username    string  `json:"username"`
+	Email       *string `json:"email"`
+	DisplayName string  `json:"displayName"`
+	FirstName   string  `json:"firstName"`
+	LastName    *string `json:"lastName"`
+	Disabled    bool    `json:"disabled"`
 }
 
 func (u userDTO) user() idp.User {
-	e := ""
-	if u.Email != nil {
-		e = *u.Email
+	return idp.User{ID: u.ID, Username: u.Username, Email: deref(u.Email), DisplayName: u.DisplayName,
+		FirstName: u.FirstName, LastName: deref(u.LastName), Disabled: u.Disabled}
+}
+
+func deref(p *string) string {
+	if p == nil {
+		return ""
 	}
-	return idp.User{ID: u.ID, Username: u.Username, Email: e}
+	return *p
+}
+
+// fullUserDTO is GET /api/users/:id: every field an update must send back.
+type fullUserDTO struct {
+	Username      string  `json:"username"`
+	Email         *string `json:"email"`
+	EmailVerified bool    `json:"emailVerified"`
+	FirstName     string  `json:"firstName"`
+	LastName      *string `json:"lastName"`
+	DisplayName   string  `json:"displayName"`
+	IsAdmin       bool    `json:"isAdmin"`
+	Locale        *string `json:"locale"`
+	Disabled      bool    `json:"disabled"`
+}
+
+// userUpdateRequest is the whole body of the one user-updating write,
+// PUT /api/users/:id. Pocket ID sets every field from it, so update fills each
+// from the user as read and the caller changes only its own. Its fields, and
+// which function may change which, are pinned by TestWriteSurface.
+type userUpdateRequest struct {
+	Username      string  `json:"username"`
+	Email         *string `json:"email"`
+	EmailVerified bool    `json:"emailVerified"`
+	FirstName     string  `json:"firstName"`
+	LastName      string  `json:"lastName"`
+	DisplayName   string  `json:"displayName"`
+	IsAdmin       bool    `json:"isAdmin"`
+	Locale        *string `json:"locale"`
+	Disabled      bool    `json:"disabled"`
 }
 
 // createUserRequest is the whole body of the one user-creating write. Its
@@ -114,6 +150,10 @@ func (c *Client) do(ctx context.Context, method, path string, body any, out any)
 		return fmt.Errorf("identity provider %s %s: %w", method, pathOnly(path), withoutURL(err))
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		io.Copy(io.Discard, resp.Body)
+		return fmt.Errorf("identity provider %s %s: %w", method, pathOnly(path), idp.ErrNotFound)
+	}
 	if resp.StatusCode/100 != 2 {
 		io.Copy(io.Discard, resp.Body)
 		return fmt.Errorf("identity provider %s %s: status %d", method, pathOnly(path), resp.StatusCode)
@@ -252,5 +292,60 @@ func (c *Client) SendLoginLink(ctx context.Context, userID string) error {
 		return err
 	}
 	slog.Info("identity provider write", "action", "user.login_link", "user_id", userID)
+	return nil
+}
+
+// ListUsers returns every user, for the admins' member search.
+func (c *Client) ListUsers(ctx context.Context) ([]idp.User, error) { return c.listUsers(ctx) }
+
+func (c *Client) GetUser(ctx context.Context, id string) (idp.User, error) {
+	var u userDTO
+	if err := c.do(ctx, http.MethodGet, "/api/users/"+url.PathEscape(id), nil, &u); err != nil {
+		return idp.User{}, err
+	}
+	return u.user(), nil
+}
+
+// update reads the user and writes it back with change applied. Pocket ID's
+// update takes every field and sets each, so every field the caller does not
+// change goes back exactly as it was read.
+func (c *Client) update(ctx context.Context, id string, change func(*userUpdateRequest)) error {
+	var cur fullUserDTO
+	if err := c.do(ctx, http.MethodGet, "/api/users/"+url.PathEscape(id), nil, &cur); err != nil {
+		return err
+	}
+	body := userUpdateRequest{Username: cur.Username, Email: cur.Email, EmailVerified: cur.EmailVerified,
+		FirstName: cur.FirstName, LastName: deref(cur.LastName), DisplayName: cur.DisplayName,
+		IsAdmin: cur.IsAdmin, Locale: cur.Locale, Disabled: cur.Disabled}
+	change(&body)
+	return c.do(ctx, http.MethodPut, "/api/users/"+url.PathEscape(id), body, nil)
+}
+
+func (c *Client) SetDisabled(ctx context.Context, id string, disabled bool) error {
+	if err := c.update(ctx, id, func(r *userUpdateRequest) { r.Disabled = disabled }); err != nil {
+		return err
+	}
+	slog.Info("identity provider write", "action", "user.disabled", "user_id", id, "disabled", disabled)
+	return nil
+}
+
+func (c *Client) SetEmail(ctx context.Context, id, email string) error {
+	email = strings.TrimSpace(email)
+	if err := c.update(ctx, id, func(r *userUpdateRequest) { r.Email = &email; r.EmailVerified = true }); err != nil {
+		return err
+	}
+	slog.Info("identity provider write", "action", "user.email", "user_id", id)
+	return nil
+}
+
+func (c *Client) SetName(ctx context.Context, id string, n idp.Name) error {
+	if err := c.update(ctx, id, func(r *userUpdateRequest) {
+		r.DisplayName = n.DisplayName
+		r.FirstName = n.FirstName
+		r.LastName = n.LastName
+	}); err != nil {
+		return err
+	}
+	slog.Info("identity provider write", "action", "user.name", "user_id", id)
 	return nil
 }

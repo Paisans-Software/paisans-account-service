@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/paisans-software/paisans-invite/internal/idp"
+	"github.com/paisans-software/paisans-account-service/internal/idp"
 )
 
 const week = 7 * 24 * time.Hour

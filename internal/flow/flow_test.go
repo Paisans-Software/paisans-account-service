@@ -9,13 +9,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/paisans-software/paisans-invite/internal/coc"
-	"github.com/paisans-software/paisans-invite/internal/flow"
-	"github.com/paisans-software/paisans-invite/internal/idp"
-	"github.com/paisans-software/paisans-invite/internal/idp/idptest"
-	"github.com/paisans-software/paisans-invite/internal/mail/mailtest"
-	"github.com/paisans-software/paisans-invite/internal/store"
-	"github.com/paisans-software/paisans-invite/internal/store/storetest"
+	"github.com/paisans-software/paisans-account-service/internal/coc"
+	"github.com/paisans-software/paisans-account-service/internal/emailhash"
+	"github.com/paisans-software/paisans-account-service/internal/flow"
+	"github.com/paisans-software/paisans-account-service/internal/idp"
+	"github.com/paisans-software/paisans-account-service/internal/idp/idptest"
+	"github.com/paisans-software/paisans-account-service/internal/mail/mailtest"
+	"github.com/paisans-software/paisans-account-service/internal/store"
+	"github.com/paisans-software/paisans-account-service/internal/store/storetest"
 )
 
 var ctx = context.Background()
@@ -28,15 +29,33 @@ func setup(t *testing.T, approval bool) (*flow.Service, *idptest.Fake, *mailtest
 }
 
 func setupStore(t *testing.T, approval bool) (*flow.Service, *idptest.Fake, *mailtest.Recorder, *store.Store) {
+	return setupWith(t, approval, time.Now)
+}
+
+// setupFull is setup with the store.
+func setupFull(t *testing.T) (*flow.Service, *idptest.Fake, *store.Store) {
+	s, f, _, st := setupStore(t, true)
+	return s, f, st
+}
+
+// setupClock is setup with approval on and the clock now.
+func setupClock(t *testing.T, now func() time.Time) (*flow.Service, *idptest.Fake, *mailtest.Recorder, *store.Store) {
+	return setupWith(t, true, now)
+}
+
+func setupWith(t *testing.T, approval bool, now func() time.Time) (*flow.Service, *idptest.Fake, *mailtest.Recorder, *store.Store) {
 	st := storetest.New(t)
 	f := &idptest.Fake{Users: []idp.User{{ID: "r", Username: "root", Email: "root@x.org"}}, Groups: map[string][]string{"admins": {"root"}}}
 	m := &mailtest.Recorder{}
 	s := flow.New(st, f, m, coc.CoC{Version: "v1"}, flow.Settings{
 		Quota: 2, RequireApproval: approval, InviteLifetime: 14 * 24 * time.Hour,
-		PublicURL: "https://invite.example.org", EmailHashKey: make([]byte, 32), AdminGroup: "admins",
-	}, time.Now)
+		AccountURL: "https://account.example.org", JoinURL: "https://join.example.org", EmailHashKey: make([]byte, 32), AdminGroup: "admins",
+		IDPURL: "https://id.example.org", Operators: []string{"Opal"},
+	}, now)
 	return s, f, m, st
 }
+
+func hashOf(email string) []byte { return emailhash.Sum(make([]byte, 32), email) }
 
 func token(t *testing.T, link string) string {
 	i := strings.LastIndex(link, "/i/")
@@ -94,7 +113,6 @@ func TestApplyRefusals(t *testing.T) {
 		"bad username":   {flow.Applicant{Username: "-bob", Email: "b@x.org", DisplayName: "B", Agreed: true}, flow.ErrInvalidUsername},
 		"long username":  {flow.Applicant{Username: strings.Repeat("a", 51), Email: "b@x.org", DisplayName: "B", Agreed: true}, flow.ErrInvalidUsername},
 		"taken username": {flow.Applicant{Username: "taken", Email: "b@x.org", DisplayName: "B", Agreed: true}, flow.ErrUsernameTaken},
-		"used email":     {flow.Applicant{Username: "bob", Email: "USED@example.org", DisplayName: "B", Agreed: true}, flow.ErrEmailTaken},
 		"bad email":      {flow.Applicant{Username: "bob", Email: "nope", DisplayName: "B", Agreed: true}, flow.ErrInvalidEmail},
 		"empty name":     {flow.Applicant{Username: "bob", Email: "b@x.org", DisplayName: " ", Agreed: true}, flow.ErrInvalidName},
 	} {
@@ -556,5 +574,23 @@ func TestUnrecordedAccountKeepsClaim(t *testing.T) {
 	}
 	if f.Created != 1 || f.LinksSent != 1 {
 		t.Fatalf("created=%d links=%d", f.Created, f.LinksSent)
+	}
+}
+
+func TestLinksUseTheirOwnHost(t *testing.T) {
+	s, _, m := setup(t, true)
+	link, _, err := s.CreateInvite(ctx, alice, flow.NewNonce())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(link, "https://join.example.org/i/") {
+		t.Fatalf("invite link %q", link)
+	}
+	if _, err := s.Apply(ctx, token(t, link), bob()); err != nil {
+		t.Fatal(err)
+	}
+	notice := m.To("root@x.org")
+	if len(notice) != 1 || !strings.Contains(notice[0].Body, "https://account.example.org/admin\n") {
+		t.Fatalf("admin notice %+v", notice)
 	}
 }

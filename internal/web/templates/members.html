@@ -1,0 +1,13 @@
+{{define "content"}}
+<div class="card"><h1>Members</h1>
+<form method="get" action="/admin/members"><label for="q">Search by username, display name or email</label>
+<input type="text" id="q" name="q" value="{{.Data.Query}}" autocomplete="off">
+<p><button>Search</button></p></form>
+{{if .Data.Query}}{{if .Data.Rows}}<table><tr><th>Who</th><th></th></tr>
+{{range .Data.Rows}}<tr>
+<td>{{.DisplayName}}<br><span class="muted">{{.Username}} · {{.Email}}{{if .Disabled}} · disabled{{end}}</span></td>
+<td>{{if .Operator}}<span class="muted">Operator</span>{{else if .Self}}<span class="muted">You</span>{{else if .Ban}}<a href="/admin/bans">Banned</a>{{else}}<form class="inline" method="get" action="/admin/members/{{.ID}}/ban"><button class="destructive">Ban</button></form>{{end}}</td>
+</tr>{{end}}</table>{{else}}<p class="muted">Nobody matches.</p>{{end}}{{end}}
+</div>
+{{template "adminnav"}}
+{{end}}

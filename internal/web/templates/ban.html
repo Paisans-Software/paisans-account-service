@@ -1,0 +1,16 @@
+{{define "content"}}
+<div class="card"><h1>Ban {{.Data.Member.Username}}</h1>
+<p>{{.Data.Member.DisplayName}}<br><span class="muted">{{.Data.Member.Username}} · {{.Data.Member.Email}}</span></p>
+{{if .Data.Member.Bannable}}
+<p>A ban disables their account and stops their address from signing up again. Their groups are kept, so lifting the ban gives back everything they had.</p>
+<p class="muted">{{.Data.Notice}}</p>
+<form method="post"><input type="hidden" name="csrf" value="{{.CSRF}}">
+<label for="reason">Reason</label><input type="text" id="reason" name="reason" value="{{.Data.Reason}}" maxlength="1000" required>
+<p class="muted">Other admins see this on the list of bans.</p>
+<p><button class="destructive">Ban</button></p></form>
+{{else if .Data.Member.Operator}}<p>Operators are managed in the deployment's configuration, not here.</p>
+{{else if .Data.Member.Self}}<p>You can't ban yourself.</p>
+{{else}}<p>They are already banned.</p>{{end}}
+</div>
+{{template "adminnav"}}
+{{end}}

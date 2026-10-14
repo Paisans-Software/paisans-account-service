@@ -8,11 +8,14 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/paisans-software/paisans-invite/internal/flow"
-	"github.com/paisans-software/paisans-invite/internal/store"
+	"github.com/paisans-software/paisans-account-service/internal/flow"
+	"github.com/paisans-software/paisans-account-service/internal/store"
 )
 
+// inviteData is invite.html's data, for an invite or, with Open, for open
+// registration.
 type inviteData struct {
+	Open                         bool
 	Inviter                      string
 	CoC                          template.HTML
 	Username, DisplayName, Email string
@@ -77,14 +80,22 @@ func (s *server) inviteSubmit(w http.ResponseWriter, r *http.Request) {
 			Data: inviteData{Inviter: inv.InviterUsername, CoC: s.Flow.CoC().HTML, Username: a.Username, DisplayName: a.DisplayName, Email: a.Email}})
 	case err != nil:
 		s.fail(w, err)
-	case now:
+	default:
+		s.submitted(w, now)
+	}
+}
+
+// submitted answers an application the flow accepted, or refused for its
+// address, alike: now is whether the account was created at once.
+func (s *server) submitted(w http.ResponseWriter, now bool) {
+	if now {
 		idp := s.Render.idp
 		s.Render.page(w, 200, "message.html", view{Title: "Check your email", Data: messageData{
 			Heading: "Check your email", Body: "We've sent you a sign-in link. " + expiresIn(s.Flow.LoginLinkDays()), Recovery: &idp}})
-	default:
-		s.Render.page(w, 200, "message.html", view{Title: "Thanks for applying", Data: messageData{
-			Heading: "Thanks for applying", Body: "An admin will review your application. Once you're approved, we'll email you a sign-in link."}})
+		return
 	}
+	s.Render.page(w, 200, "message.html", view{Title: "Thanks for applying", Data: messageData{
+		Heading: "Thanks for applying", Body: "An admin will review your application. Once you're approved, we'll email you a sign-in link."}})
 }
 
 // expiresIn states the sign-in link's lifetime as a sentence.
@@ -104,7 +115,7 @@ func capitalise(s string) string {
 }
 
 var validationErrors = []error{flow.ErrInvalidUsername, flow.ErrInvalidEmail, flow.ErrInvalidName,
-	flow.ErrUsernameTaken, flow.ErrEmailTaken, flow.ErrNotAgreed}
+	flow.ErrUsernameTaken, flow.ErrNotAgreed}
 
 // validationSentence returns the flow sentinel's own text, never a wrapper's.
 func validationSentence(err error) string {

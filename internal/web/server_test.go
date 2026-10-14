@@ -11,13 +11,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/paisans-software/paisans-invite/internal/coc"
-	"github.com/paisans-software/paisans-invite/internal/flow"
-	"github.com/paisans-software/paisans-invite/internal/idp"
-	"github.com/paisans-software/paisans-invite/internal/idp/idptest"
-	"github.com/paisans-software/paisans-invite/internal/mail/mailtest"
-	"github.com/paisans-software/paisans-invite/internal/store"
-	"github.com/paisans-software/paisans-invite/internal/store/storetest"
+	"github.com/paisans-software/paisans-account-service/internal/coc"
+	"github.com/paisans-software/paisans-account-service/internal/config"
+	"github.com/paisans-software/paisans-account-service/internal/flow"
+	"github.com/paisans-software/paisans-account-service/internal/idp"
+	"github.com/paisans-software/paisans-account-service/internal/idp/idptest"
+	"github.com/paisans-software/paisans-account-service/internal/mail/mailtest"
+	"github.com/paisans-software/paisans-account-service/internal/store"
+	"github.com/paisans-software/paisans-account-service/internal/store/storetest"
 )
 
 type harness struct {
@@ -26,6 +27,7 @@ type harness struct {
 	fake *idptest.Fake
 	flow *flow.Service
 	st   *store.Store
+	mail *mailtest.Recorder
 }
 
 func newHarness(t *testing.T, approval bool) harness {
@@ -41,21 +43,58 @@ func newHarnessIDP(t *testing.T, approval bool, idpURL string) harness {
 // newHarnessWith also takes the sign-in link's lifetime in days, the value
 // New takes from config.Config.LoginLinkDays.
 func newHarnessWith(t *testing.T, approval bool, idpURL string, linkDays int) harness {
+	return newHarnessFull(t, approval, idpURL, linkDays, config.SignupInvite)
+}
+
+// newHarnessSignup is newHarness with ACCOUNT_SIGNUP set to signup.
+func newHarnessSignup(t *testing.T, signup string) harness {
+	return newHarnessFull(t, true, "https://id.example.org", 7, signup)
+}
+
+// The two hosts the harness serves, as config.Config.AccountHost and
+// JoinHost give them.
+const (
+	accountHost = "account.example.org"
+	joinHost    = "join.example.org"
+)
+
+func newHarnessFull(t *testing.T, approval bool, idpURL string, linkDays int, signup string) harness {
 	st := storetest.New(t)
-	fake := &idptest.Fake{Users: []idp.User{{ID: "r", Username: "root", Email: "root@x.org"}}, Groups: map[string][]string{"admins": {"root"}}}
+	// Each session's sub is its user's ID, as Pocket ID's are.
+	fake := &idptest.Fake{Users: []idp.User{
+		{ID: "s-root", Username: "root", Email: "root@x.org", DisplayName: "Root"},
+		{ID: "s-alice", Username: "alice", Email: "alice@x.org", DisplayName: "Alice"},
+		{ID: "s-opal", Username: "opal", Email: "opal@x.org", DisplayName: "Opal"},
+	}, Groups: map[string][]string{"admins": {"root"}}}
 	key := make([]byte, 32)
-	f := flow.New(st, fake, &mailtest.Recorder{}, coc.CoC{Version: "v", HTML: "<p>Be kind</p>"}, flow.Settings{
-		Quota: 1, RequireApproval: approval, InviteLifetime: time.Hour, PublicURL: "https://invite.example.org", EmailHashKey: key, AdminGroup: "admins",
-		LoginLinkDays: linkDays,
+	m := &mailtest.Recorder{}
+	f := flow.New(st, fake, m, coc.CoC{Version: "v", HTML: "<p>Be kind</p>"}, flow.Settings{
+		Quota: 1, RequireApproval: approval, InviteLifetime: time.Hour, EmailHashKey: key, AdminGroup: "admins",
+		AccountURL: "https://" + accountHost, JoinURL: "https://" + joinHost,
+		LoginLinkDays: linkDays, IDPURL: idpURL, Operators: []string{"opal"},
 	}, time.Now)
 	r, err := newRenderer("", idpURL)
 	if err != nil {
 		t.Fatal(err)
 	}
 	s := sessions{key: key}
-	return harness{h: NewServer(Options{Flow: f, Sessions: s, Auth: http.NotFoundHandler(), Render: r, Health: st, SessionKey: key}), s: s, fake: fake, flow: f, st: st}
+	// The sign-in handlers need a provider; these stand in for them, so a
+	// test can tell a request that reached them from the mux's 404.
+	auth := http.NewServeMux()
+	auth.HandleFunc("GET /auth/login", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
+	auth.HandleFunc("GET /auth/callback", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
+	return harness{h: NewServer(Options{Flow: f, Sessions: s, Auth: auth, Render: r, Health: st, SessionKey: key,
+		AccountHost: accountHost, JoinHost: joinHost, Signup: signup}), s: s, fake: fake, flow: f, st: st, mail: m}
 }
 
+// get sends an anonymous GET for path to host.
+func (h harness) get(host, path string) *httptest.ResponseRecorder {
+	rec := httptest.NewRecorder()
+	h.h.ServeHTTP(rec, httptest.NewRequest("GET", "http://"+host+path, nil))
+	return rec
+}
+
+// as sends a request on the account host with sess's cookie.
 func (h harness) as(sess Session, method, path string, form url.Values) *httptest.ResponseRecorder {
 	rec := httptest.NewRecorder()
 	h.s.write(rec, sess)
@@ -65,7 +104,7 @@ func (h harness) as(sess Session, method, path string, form url.Values) *httptes
 	} else {
 		body = strings.NewReader("")
 	}
-	req := httptest.NewRequest(method, path, body)
+	req := httptest.NewRequest(method, "http://"+accountHost+path, body)
 	if form != nil {
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	}
@@ -88,8 +127,7 @@ var admin = Session{Sub: "s-root", Username: "root", Admin: true, CSRF: "tok", E
 
 func TestAnonymousRedirectsToLogin(t *testing.T) {
 	h := newHarness(t, true)
-	rec := httptest.NewRecorder()
-	h.h.ServeHTTP(rec, httptest.NewRequest("GET", "/", nil))
+	rec := h.get(accountHost, "/")
 	if rec.Code != 302 || rec.Header().Get("Location") != "/auth/login?next=%2F" {
 		t.Fatalf("%d %s", rec.Code, rec.Header().Get("Location"))
 	}
@@ -98,7 +136,7 @@ func TestAnonymousRedirectsToLogin(t *testing.T) {
 func TestCreateInviteShowsLinkOnceAndEnforcesQuota(t *testing.T) {
 	h := newHarness(t, true)
 	rec := h.as(member, "POST", "/invites", createForm())
-	if rec.Code != 200 || !strings.Contains(rec.Body.String(), "https://invite.example.org/i/") {
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), "https://join.example.org/i/") {
 		t.Fatalf("%d %s", rec.Code, rec.Body.String())
 	}
 	rec = h.as(member, "POST", "/invites", createForm())
@@ -198,14 +236,13 @@ func TestCSRFRefusedOnEveryPost(t *testing.T) {
 
 func TestAnonymousAdminRedirects(t *testing.T) {
 	h := newHarness(t, true)
-	rec := httptest.NewRecorder()
-	h.h.ServeHTTP(rec, httptest.NewRequest("GET", "/admin", nil))
+	rec := h.get(accountHost, "/admin")
 	if rec.Code != 302 || rec.Header().Get("Location") != "/auth/login?next=%2Fadmin" {
 		t.Fatalf("%d %s", rec.Code, rec.Header().Get("Location"))
 	}
 	// A form post cannot be replayed after sign-in, so it carries no next.
 	rec = httptest.NewRecorder()
-	h.h.ServeHTTP(rec, httptest.NewRequest("POST", "/invites", nil))
+	h.h.ServeHTTP(rec, httptest.NewRequest("POST", "http://"+accountHost+"/invites", nil))
 	if rec.Code != 302 || rec.Header().Get("Location") != "/auth/login" {
 		t.Fatalf("%d %s", rec.Code, rec.Header().Get("Location"))
 	}
@@ -241,11 +278,11 @@ func TestNewLinkNeverLeavesTheResponseBody(t *testing.T) {
 	h := newHarness(t, true)
 	rec := h.as(member, "POST", "/invites", createForm())
 	body := rec.Body.String()
-	i := strings.Index(body, "https://invite.example.org/i/")
+	i := strings.Index(body, "https://join.example.org/i/")
 	if i < 0 {
 		t.Fatal("no link")
 	}
-	tok := body[i+len("https://invite.example.org/i/"):][:43]
+	tok := body[i+len("https://join.example.org/i/"):][:43]
 	if rec.Header().Get("Location") != "" {
 		t.Fatal("link in Location")
 	}
@@ -286,7 +323,7 @@ func TestCreateFormResubmittedMakesOneInvite(t *testing.T) {
 	h := newHarness(t, true)
 	f := createForm()
 	first := h.as(admin, "POST", "/invites", f)
-	if first.Code != 200 || !strings.Contains(first.Body.String(), "https://invite.example.org/i/") {
+	if first.Code != 200 || !strings.Contains(first.Body.String(), "https://join.example.org/i/") {
 		t.Fatalf("%d %s", first.Code, first.Body.String())
 	}
 	again := h.as(admin, "POST", "/invites", f)
@@ -388,8 +425,7 @@ func TestHostileValuesEscapedOnEveryPage(t *testing.T) {
 	h := newHarness(t, true)
 	evil := Session{Sub: "s-evil", Username: hostile, CSRF: "tok", Exp: time.Now().Add(time.Hour).Unix()}
 	tok, _ := h.inviteAs(t, flow.Member{Sub: evil.Sub, Username: evil.Username})
-	inviteRec := httptest.NewRecorder()
-	h.h.ServeHTTP(inviteRec, httptest.NewRequest("GET", "/i/"+tok, nil))
+	inviteRec := h.get(joinHost, "/i/"+tok)
 	if _, err := h.flow.Apply(context.Background(), tok, flow.Applicant{Username: "bob", Email: "bob@x.org", DisplayName: hostile, Agreed: true}); err != nil {
 		t.Fatal(err)
 	}
@@ -411,16 +447,11 @@ func TestHostileValuesEscapedOnEveryPage(t *testing.T) {
 func TestRenderedPagesCarryCSP(t *testing.T) {
 	h := newHarness(t, true)
 	tok, _ := h.invite(t)
-	get := func(path string) *httptest.ResponseRecorder {
-		rec := httptest.NewRecorder()
-		h.h.ServeHTTP(rec, httptest.NewRequest("GET", path, nil))
-		return rec
-	}
 	for name, rec := range map[string]*httptest.ResponseRecorder{
 		"home":     h.as(member, "GET", "/", nil),
 		"admin":    h.as(admin, "GET", "/admin", nil),
-		"invite":   get("/i/" + tok),
-		"unusable": get("/i/nope"),
+		"invite":   h.get(joinHost, "/i/"+tok),
+		"unusable": h.get(joinHost, "/i/nope"),
 		"created":  h.as(admin, "POST", "/invites", createForm()),
 	} {
 		csp := rec.Header().Get("Content-Security-Policy")

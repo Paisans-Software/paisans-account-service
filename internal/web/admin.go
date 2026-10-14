@@ -7,8 +7,8 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/paisans-software/paisans-invite/internal/flow"
-	"github.com/paisans-software/paisans-invite/internal/store"
+	"github.com/paisans-software/paisans-account-service/internal/flow"
+	"github.com/paisans-software/paisans-account-service/internal/store"
 )
 
 // Error text on the admin page is chosen by the server from a fixed code, so a
@@ -18,6 +18,7 @@ var decisionErrors = map[string]string{
 	"email_taken":    "An account already uses that email address.",
 	"not_found":      "That application no longer exists.",
 	"busy":           "Someone else is deciding this application; refresh in a moment.",
+	"banned":         "That address is banned. Decline the application.",
 	"forbidden":      "Only admins can do that.",
 	"failed":         "That did not work. The identity provider or database may be unavailable; try again.",
 }
@@ -28,6 +29,8 @@ func decisionCode(err error) string {
 		return "username_taken"
 	case errors.Is(err, flow.ErrEmailTaken):
 		return "email_taken"
+	case errors.Is(err, flow.ErrBanned):
+		return "banned"
 	case errors.Is(err, store.ErrNotFound):
 		return "not_found"
 	case errors.Is(err, store.ErrBusy):
@@ -38,6 +41,7 @@ func decisionCode(err error) string {
 	return "failed"
 }
 
+// queue is the admin page: the applications waiting for a decision.
 func (s *server) queue(w http.ResponseWriter, r *http.Request, sess Session) {
 	p, err := s.Flow.Pending(r.Context())
 	if err != nil {

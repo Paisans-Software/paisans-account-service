@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/paisans-software/paisans-invite/internal/config"
+	"github.com/paisans-software/paisans-account-service/internal/config"
 )
 
 // fakeOP is a minimal OpenID provider: discovery, JWKS and a token endpoint
@@ -128,7 +128,7 @@ func (op *fakeOP) sign(claims map[string]any) string {
 func newTestAuthenticator(t *testing.T, op *fakeOP) *authenticator {
 	t.Helper()
 	cfg := config.Config{OIDCIssuer: op.srv.URL, OIDCClientID: "invite", OIDCClientSecret: "secret",
-		PublicURL: "https://invite.example.org", MemberGroup: "members", AdminGroup: "admins"}
+		AccountURL: "https://account.example.org", MemberGroup: "members", AdminGroup: "admins"}
 	a, err := newAuthenticator(context.Background(), cfg, sessions{key: make([]byte, 32)})
 	if err != nil {
 		t.Fatal(err)

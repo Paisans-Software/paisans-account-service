@@ -20,6 +20,8 @@ var staticFS embed.FS
 var accentRule = regexp.MustCompile(`^(#[0-9a-fA-F]{3,8}|[a-zA-Z]+|(rgb|hsl|oklch)a?\([0-9.,%\s/]+\))$`)
 
 type view struct {
+	// Notice is a server-chosen line of good news above the content.
+	Notice               string
 	Title, LogoURL, CSRF string
 	Accent               template.CSS
 	Session              *Session
@@ -35,7 +37,7 @@ type renderer struct {
 }
 
 // idpLink is the identity provider as a page shows it: the configured
-// INVITE_IDP_URL, and its host as the link text.
+// ACCOUNT_IDP_URL, and its host as the link text.
 type idpLink struct{ URL, Host string }
 
 // messageData is message.html's data. Recovery, when set, adds the line that
@@ -58,7 +60,8 @@ func newRenderer(accent, idpURL string) (*renderer, error) {
 	if !strings.EqualFold(accent, "default") && accentRule.MatchString(accent) {
 		r.accent = template.CSS(accent)
 	}
-	for _, name := range []string{"home.html", "admin.html", "invite.html", "message.html"} {
+	for _, name := range []string{"home.html", "admin.html", "invite.html", "message.html",
+		"members.html", "ban.html", "bans.html", "email.html", "name.html", "recovery.html"} {
 		t, err := template.ParseFS(templateFS, "templates/layout.html", "templates/"+name)
 		if err != nil {
 			return nil, err

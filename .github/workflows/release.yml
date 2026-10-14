@@ -1,12 +1,10 @@
-# A tag vX.Y.Z publishes ghcr.io/paisans-software/paisans-invite:X.Y.Z; a push
-# to develop publishes develop and sha-<short>. The toolkit's invite kind pins
-# a released tag.
+# A tag vX.Y.Z publishes ghcr.io/paisans-software/paisans-account-service:X.Y.Z,
+# and nothing else publishes. The toolkit's `account` blueprint pins a
+# released tag.
 name: release
 on:
   push:
-    branches: [develop]
     tags: ["v*"]
-  workflow_dispatch:
 permissions:
   contents: read
   packages: write
@@ -25,12 +23,10 @@ jobs:
       - id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/paisans-software/paisans-invite
+          images: ghcr.io/paisans-software/paisans-account-service
           flavor: latest=false
           tags: |
             type=semver,pattern={{version}}
-            type=ref,event=branch
-            type=sha
       - uses: docker/build-push-action@v6
         with:
           context: .

@@ -65,11 +65,11 @@ func (s sessions) write(w http.ResponseWriter, sess Session) {
 		slog.Error("session sign failed", "err", err)
 		return
 	}
-	http.SetCookie(w, s.cookie("invite_session", v, int(time.Until(time.Unix(sess.Exp, 0)).Seconds())))
+	http.SetCookie(w, s.cookie("account_session", v, int(time.Until(time.Unix(sess.Exp, 0)).Seconds())))
 }
 
 func (s sessions) read(r *http.Request) (Session, bool) {
-	c, err := r.Cookie("invite_session")
+	c, err := r.Cookie("account_session")
 	if err != nil {
 		return Session{}, false
 	}
@@ -80,7 +80,9 @@ func (s sessions) read(r *http.Request) (Session, bool) {
 	return sess, true
 }
 
-func (s sessions) clear(w http.ResponseWriter) { http.SetCookie(w, s.cookie("invite_session", "", -1)) }
+func (s sessions) clear(w http.ResponseWriter) {
+	http.SetCookie(w, s.cookie("account_session", "", -1))
+}
 
 func inviteeCSRF(key, tokenHash []byte) string {
 	m := hmac.New(sha256.New, key)

@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -82,5 +83,25 @@ func TestSweepRunsUnderOpenSignup(t *testing.T) {
 	<-stopped
 	if len(list) != 1 || list[0].ID != inv.ID || list[0].State != "expired" {
 		t.Fatalf("invite not swept: %+v %v", list, err)
+	}
+}
+
+// A public ACCOUNT_IDP_URL stops the service before it opens the database or
+// serves a request, naming the variable.
+func TestRunRefusesPublicIDPURL(t *testing.T) {
+	key := strings.Repeat("A", 43)
+	for k, v := range map[string]string{
+		"ACCOUNT_PUBLIC_URL": "https://account.example.org", "ACCOUNT_SIGNUP": "invite", "ACCOUNT_JOIN_PUBLIC_URL": "https://join.example.org",
+		"ACCOUNT_DATABASE_URL": "postgres://nobody@127.0.0.1:1/none?connect_timeout=1", "ACCOUNT_SESSION_KEY": key, "ACCOUNT_EMAIL_HASH_KEY": key,
+		"ACCOUNT_OIDC_ISSUER": "https://id.example.org", "ACCOUNT_OIDC_CLIENT_ID": "c", "ACCOUNT_OIDC_CLIENT_SECRET": "s",
+		"ACCOUNT_MEMBER_GROUP": "members", "ACCOUNT_ADMIN_GROUP": "admins",
+		"ACCOUNT_IDP_URL": "https://id.example.org", "ACCOUNT_IDP_API_KEY": "SECRETKEY",
+		"ACCOUNT_SMTP_HOST": "mail", "ACCOUNT_SMTP_FROM": "a@example.org",
+	} {
+		t.Setenv(k, v)
+	}
+	err := run()
+	if err == nil || !strings.Contains(err.Error(), "ACCOUNT_IDP_URL") || strings.Contains(err.Error(), "SECRETKEY") || strings.Contains(err.Error(), "database") {
+		t.Fatalf("want a configuration error naming ACCOUNT_IDP_URL, got %v", err)
 	}
 }

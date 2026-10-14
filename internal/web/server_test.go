@@ -35,7 +35,7 @@ func newHarness(t *testing.T, approval bool) harness {
 }
 
 // newHarnessIDP is newHarness with the identity provider at idpURL, the value
-// New takes from config.Config.IDPURL.
+// New takes from config.Config.IDPPublicURL.
 func newHarnessIDP(t *testing.T, approval bool, idpURL string) harness {
 	return newHarnessWith(t, approval, idpURL, 7)
 }

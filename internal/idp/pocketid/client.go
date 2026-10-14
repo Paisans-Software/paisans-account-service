@@ -1,77 +1,83 @@
-// Package pocketid is the only package that sends HTTP to the identity
-// provider. Its write surface is pinned by writesurface_test.go.
+// Package pocketid is the only package that reaches the identity provider.
+// It is the service's adapter to the shared Pocket ID client,
+// github.com/paisans-software/pocketid-go, through which every request goes.
+// Its write surface is pinned by writesurface_test.go.
 package pocketid
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strings"
 	"time"
 
 	"github.com/paisans-software/paisans-account-service/internal/idp"
+	pid "github.com/paisans-software/pocketid-go"
 )
 
 type Client struct {
-	base, key string
-	hc        *http.Client
-	// linkTTL is the sign-in link's lifetime, sent in whole hours. Pocket ID
-	// accepts at most 744h; config.Load holds it to 1 to 31 days.
+	api *pid.Client
+	// linkTTL is the sign-in link's lifetime, a whole number of hours. Pocket
+	// ID accepts at most 744h; config.Load holds it to 1 to 31 days.
 	linkTTL time.Duration
 }
 
 var _ idp.Provider = (*Client)(nil)
 
-// maxPages bounds a listing so a misbehaving server cannot hold a request open.
-const maxPages = 100
-
 // maxLinkTTL is the longest sign-in link Pocket ID accepts.
 const maxLinkTTL = 744 * time.Hour
 
-// New copies hc so that a redirect is an error: the API key header must never
-// follow a 3xx to another place. linkTTL is the lifetime of every sign-in link
-// the client sends: a whole number of hours from 1h to 744h, or New refuses.
-func New(baseURL, apiKey string, hc *http.Client, linkTTL time.Duration) (*Client, error) {
+// New refuses a base URL whose host is not private, as pocketid-go judges it
+// with networks, so the API key is never sent anywhere else; config.Load
+// refuses the same earlier, naming the variable. It copies hc, so the caller
+// cannot change it afterwards; pocketid-go answers a redirect rather than
+// following it, so the key never follows a 3xx to another place.
+// linkTTL is the lifetime of every sign-in link the client sends: a whole
+// number of hours from 1h to 744h, or New refuses.
+func New(baseURL, apiKey string, hc *http.Client, linkTTL time.Duration, networks ...netip.Prefix) (*Client, error) {
 	if linkTTL < time.Hour || linkTTL > maxLinkTTL || linkTTL%time.Hour != 0 {
 		return nil, errors.New("identity provider: the sign-in link lifetime must be a whole number of hours from 1h to 744h")
+	}
+	u, err := url.Parse(baseURL)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return nil, errors.New("identity provider: the API's address must be an absolute http or https URL")
+	}
+	if !pid.Private(u.Hostname(), networks...) {
+		return nil, fmt.Errorf("identity provider: %s is not a private address, and the API key is sent only to one", u.Hostname())
 	}
 	var cp http.Client
 	if hc != nil {
 		cp = *hc
 	}
-	cp.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	return &Client{base: strings.TrimRight(baseURL, "/"), key: apiKey, hc: &cp, linkTTL: linkTTL}, nil
+	return &Client{
+		api:     &pid.Client{HTTP: &cp, BaseURL: strings.TrimRight(baseURL, "/"), APIKey: apiKey, Networks: networks},
+		linkTTL: linkTTL,
+	}, nil
 }
 
-// withoutURL drops the *url.Error wrapper, whose message carries the whole
-// request URL and with it any query.
-func withoutURL(err error) error {
+// wrap names the identity provider in an error, makes a 404 idp.ErrNotFound,
+// and drops a *url.Error's URL, which carries the query.
+func wrap(err error) error {
+	if err == nil {
+		return nil
+	}
+	var ae *pid.APIError
+	if errors.As(err, &ae) && ae.Status == http.StatusNotFound {
+		return fmt.Errorf("identity provider %s %s: %w", ae.Method, ae.Path, idp.ErrNotFound)
+	}
 	var ue *url.Error
 	if errors.As(err, &ue) {
-		return ue.Err
+		msg := err.Error()
+		if i := strings.Index(msg, ue.Error()); i >= 0 {
+			return fmt.Errorf("identity provider: %s%w", msg[:i], ue.Err)
+		}
+		return fmt.Errorf("identity provider: %w", ue.Err)
 	}
-	return err
-}
-
-type userDTO struct {
-	ID          string  `json:"id"`
-	Username    string  `json:"username"`
-	Email       *string `json:"email"`
-	DisplayName string  `json:"displayName"`
-	FirstName   string  `json:"firstName"`
-	LastName    *string `json:"lastName"`
-	Disabled    bool    `json:"disabled"`
-}
-
-func (u userDTO) user() idp.User {
-	return idp.User{ID: u.ID, Username: u.Username, Email: deref(u.Email), DisplayName: u.DisplayName,
-		FirstName: u.FirstName, LastName: deref(u.LastName), Disabled: u.Disabled}
+	return fmt.Errorf("identity provider: %w", err)
 }
 
 func deref(p *string) string {
@@ -81,116 +87,27 @@ func deref(p *string) string {
 	return *p
 }
 
-// fullUserDTO is GET /api/users/:id: every field an update must send back.
-type fullUserDTO struct {
-	Username      string  `json:"username"`
-	Email         *string `json:"email"`
-	EmailVerified bool    `json:"emailVerified"`
-	FirstName     string  `json:"firstName"`
-	LastName      *string `json:"lastName"`
-	DisplayName   string  `json:"displayName"`
-	IsAdmin       bool    `json:"isAdmin"`
-	Locale        *string `json:"locale"`
-	Disabled      bool    `json:"disabled"`
+func toUser(u pid.User) idp.User {
+	return idp.User{ID: u.ID, Username: u.Username, Email: deref(u.Email), DisplayName: u.DisplayName,
+		FirstName: u.FirstName, LastName: deref(u.LastName), Disabled: u.Disabled}
 }
 
-// userUpdateRequest is the whole body of the one user-updating write,
-// PUT /api/users/:id. Pocket ID sets every field from it, so update fills each
-// from the user as read and the caller changes only its own. Its fields, and
-// which function may change which, are pinned by TestWriteSurface.
-type userUpdateRequest struct {
-	Username      string  `json:"username"`
-	Email         *string `json:"email"`
-	EmailVerified bool    `json:"emailVerified"`
-	FirstName     string  `json:"firstName"`
-	LastName      string  `json:"lastName"`
-	DisplayName   string  `json:"displayName"`
-	IsAdmin       bool    `json:"isAdmin"`
-	Locale        *string `json:"locale"`
-	Disabled      bool    `json:"disabled"`
+func toGroup(g pid.Group) idp.Group {
+	return idp.Group{ID: g.ID, Name: g.Name, FriendlyName: g.FriendlyName}
 }
-
-// createUserRequest is the whole body of the one user-creating write. Its
-// fields are pinned by TestWriteSurface.
-type createUserRequest struct {
-	Username      string `json:"username"`
-	Email         string `json:"email"`
-	EmailVerified bool   `json:"emailVerified"`
-	DisplayName   string `json:"displayName"`
-}
-
-// loginLinkRequest is the whole body of the login-link write. Pocket ID's
-// default lifetime is 15 minutes; the link is sent for the configured number of
-// days in hours, which its email reads back as days ("168h" is "7 days"). Its
-// one field, and the expression that fills it, are pinned by TestWriteSurface.
-type loginLinkRequest struct {
-	TTL string `json:"ttl"`
-}
-
-func (c *Client) do(ctx context.Context, method, path string, body any, out any) error {
-	var rd io.Reader
-	if body != nil {
-		b, err := json.Marshal(body)
-		if err != nil {
-			return err
-		}
-		rd = bytes.NewReader(b)
-	}
-	req, err := http.NewRequestWithContext(ctx, method, c.base+path, rd)
-	if err != nil {
-		return fmt.Errorf("identity provider %s %s: %w", method, pathOnly(path), withoutURL(err))
-	}
-	req.Header.Set("X-API-Key", c.key)
-	req.Header.Set("Accept", "application/json")
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	resp, err := c.hc.Do(req)
-	if err != nil {
-		return fmt.Errorf("identity provider %s %s: %w", method, pathOnly(path), withoutURL(err))
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode == http.StatusNotFound {
-		io.Copy(io.Discard, resp.Body)
-		return fmt.Errorf("identity provider %s %s: %w", method, pathOnly(path), idp.ErrNotFound)
-	}
-	if resp.StatusCode/100 != 2 {
-		io.Copy(io.Discard, resp.Body)
-		return fmt.Errorf("identity provider %s %s: status %d", method, pathOnly(path), resp.StatusCode)
-	}
-	if out == nil {
-		return nil
-	}
-	return json.NewDecoder(resp.Body).Decode(out)
-}
-
-func pathOnly(p string) string { return strings.SplitN(p, "?", 2)[0] }
 
 // listUsers returns every user. Pocket ID's search is a case-sensitive LIKE on
 // Postgres, so callers filter the full list themselves.
 func (c *Client) listUsers(ctx context.Context) ([]idp.User, error) {
-	var users []idp.User
-	for page := 1; ; page++ {
-		if page > maxPages {
-			return nil, fmt.Errorf("identity provider GET /api/users: more than %d pages", maxPages)
-		}
-		q := url.Values{"pagination[page]": {fmt.Sprint(page)}, "pagination[limit]": {"100"}}
-		var res struct {
-			Data       []userDTO `json:"data"`
-			Pagination struct {
-				TotalPages int `json:"totalPages"`
-			} `json:"pagination"`
-		}
-		if err := c.do(ctx, http.MethodGet, "/api/users?"+q.Encode(), nil, &res); err != nil {
-			return nil, err
-		}
-		for _, u := range res.Data {
-			users = append(users, u.user())
-		}
-		if page >= res.Pagination.TotalPages {
-			return users, nil
-		}
+	us, err := c.api.Users(ctx)
+	if err != nil {
+		return nil, wrap(err)
 	}
+	out := make([]idp.User, 0, len(us))
+	for _, u := range us {
+		out = append(out, toUser(u))
+	}
+	return out, nil
 }
 
 func (c *Client) FindUser(ctx context.Context, username string) (idp.User, bool, error) {
@@ -225,71 +142,48 @@ func (c *Client) EmailTaken(ctx context.Context, email string) (bool, error) {
 	return false, nil
 }
 
-// AdminGroupEmails returns the email addresses of the members of the group
-// whose name (the value in the groups claim) is exactly group. Pocket ID's
-// group search is a substring match, so the listing is filtered here.
+// AdminGroupEmails returns the email addresses of the enabled members of the
+// group whose name (the value in the groups claim) is exactly group:
+// FindGroup compares exactly, and every user is listed with their groups.
 func (c *Client) AdminGroupEmails(ctx context.Context, group string) ([]string, error) {
-	id, err := c.groupID(ctx, group)
+	g, err := c.api.FindGroup(ctx, group)
 	if err != nil {
-		return nil, err
+		return nil, wrap(err)
 	}
-	var g struct {
-		Users []userDTO `json:"users"`
+	if g == nil {
+		return nil, fmt.Errorf("identity provider: no group named %q", group)
 	}
-	if err := c.do(ctx, http.MethodGet, "/api/user-groups/"+url.PathEscape(id), nil, &g); err != nil {
-		return nil, err
+	us, err := c.api.Users(ctx)
+	if err != nil {
+		return nil, wrap(err)
 	}
 	var out []string
-	for _, u := range g.Users {
-		if u.Email != nil && *u.Email != "" && !u.Disabled {
+	for _, u := range us {
+		if u.InGroup(g.ID) && deref(u.Email) != "" && !u.Disabled {
 			out = append(out, *u.Email)
 		}
 	}
 	return out, nil
 }
 
-func (c *Client) groupID(ctx context.Context, name string) (string, error) {
-	for page := 1; ; page++ {
-		if page > maxPages {
-			return "", fmt.Errorf("identity provider GET /api/user-groups: more than %d pages", maxPages)
-		}
-		q := url.Values{"search": {name}, "pagination[page]": {fmt.Sprint(page)}, "pagination[limit]": {"100"}}
-		var res struct {
-			Data []struct {
-				ID   string `json:"id"`
-				Name string `json:"name"`
-			} `json:"data"`
-			Pagination struct {
-				TotalPages int `json:"totalPages"`
-			} `json:"pagination"`
-		}
-		if err := c.do(ctx, http.MethodGet, "/api/user-groups?"+q.Encode(), nil, &res); err != nil {
-			return "", err
-		}
-		for _, g := range res.Data {
-			if g.Name == name {
-				return g.ID, nil
-			}
-		}
-		if page >= res.Pagination.TotalPages {
-			return "", fmt.Errorf("identity provider: no group named %q", name)
-		}
-	}
-}
-
+// CreateUser creates a user with an unverified address, no first or last
+// name, and not an administrator.
 func (c *Client) CreateUser(ctx context.Context, u idp.NewUser) (idp.User, error) {
-	var out userDTO
-	body := createUserRequest{Username: u.Username, Email: strings.TrimSpace(u.Email), EmailVerified: false, DisplayName: u.DisplayName}
-	if err := c.do(ctx, http.MethodPost, "/api/users", body, &out); err != nil {
-		return idp.User{}, err
+	email := strings.TrimSpace(u.Email)
+	out, err := c.api.CreateUser(ctx, pid.NewUser{Username: u.Username, Email: &email, DisplayName: u.DisplayName})
+	if err != nil {
+		return idp.User{}, wrap(err)
 	}
 	slog.Info("identity provider write", "action", "user.create", "user_id", out.ID)
-	return out.user(), nil
+	return toUser(out), nil
 }
 
+// SendLoginLink has Pocket ID email the user a sign-in link that lasts
+// linkTTL. Pocket ID answers once the link is stored and sends the email
+// afterwards, so a failed send is not reported here.
 func (c *Client) SendLoginLink(ctx context.Context, userID string) error {
-	if err := c.do(ctx, http.MethodPost, "/api/users/"+url.PathEscape(userID)+"/one-time-access-email", loginLinkRequest{TTL: fmt.Sprintf("%dh", c.linkTTL/time.Hour)}, nil); err != nil {
-		return err
+	if err := c.api.EmailLoginLink(ctx, userID, c.linkTTL); err != nil {
+		return wrap(err)
 	}
 	slog.Info("identity provider write", "action", "user.login_link", "user_id", userID)
 	return nil
@@ -299,99 +193,58 @@ func (c *Client) SendLoginLink(ctx context.Context, userID string) error {
 func (c *Client) ListUsers(ctx context.Context) ([]idp.User, error) { return c.listUsers(ctx) }
 
 func (c *Client) GetUser(ctx context.Context, id string) (idp.User, error) {
-	var u userDTO
-	if err := c.do(ctx, http.MethodGet, "/api/users/"+url.PathEscape(id), nil, &u); err != nil {
-		return idp.User{}, err
+	u, err := c.api.User(ctx, id)
+	if err != nil {
+		return idp.User{}, wrap(err)
 	}
-	return u.user(), nil
+	return toUser(u), nil
 }
 
-// update reads the user and writes it back with change applied. Pocket ID's
-// update takes every field and sets each, so every field the caller does not
-// change goes back exactly as it was read.
-func (c *Client) update(ctx context.Context, id string, change func(*userUpdateRequest)) error {
-	var cur fullUserDTO
-	if err := c.do(ctx, http.MethodGet, "/api/users/"+url.PathEscape(id), nil, &cur); err != nil {
-		return err
-	}
-	body := userUpdateRequest{Username: cur.Username, Email: cur.Email, EmailVerified: cur.EmailVerified,
-		FirstName: cur.FirstName, LastName: deref(cur.LastName), DisplayName: cur.DisplayName,
-		IsAdmin: cur.IsAdmin, Locale: cur.Locale, Disabled: cur.Disabled}
-	change(&body)
-	return c.do(ctx, http.MethodPut, "/api/users/"+url.PathEscape(id), body, nil)
-}
+// SetDisabled, SetEmail and SetName each change only their own fields with
+// pocketid-go's UpdateUser, which reads the user and sends every other field
+// back as read: Pocket ID's update takes every field and sets each. The
+// username and the admin flag are not in a UserChange, so no update changes
+// them.
 
 func (c *Client) SetDisabled(ctx context.Context, id string, disabled bool) error {
-	if err := c.update(ctx, id, func(r *userUpdateRequest) { r.Disabled = disabled }); err != nil {
-		return err
+	if _, err := c.api.UpdateUser(ctx, id, pid.UserChange{Disabled: &disabled}); err != nil {
+		return wrap(err)
 	}
 	slog.Info("identity provider write", "action", "user.disabled", "user_id", id, "disabled", disabled)
 	return nil
 }
 
+// SetEmail sets the address and marks it verified: Pocket ID resets the
+// verification of a changed address unless the update sets it.
 func (c *Client) SetEmail(ctx context.Context, id, email string) error {
 	email = strings.TrimSpace(email)
-	if err := c.update(ctx, id, func(r *userUpdateRequest) { r.Email = &email; r.EmailVerified = true }); err != nil {
-		return err
+	verified := true
+	if _, err := c.api.UpdateUser(ctx, id, pid.UserChange{Email: &email, EmailVerified: &verified}); err != nil {
+		return wrap(err)
 	}
 	slog.Info("identity provider write", "action", "user.email", "user_id", id)
 	return nil
 }
 
 func (c *Client) SetName(ctx context.Context, id string, n idp.Name) error {
-	if err := c.update(ctx, id, func(r *userUpdateRequest) {
-		r.DisplayName = n.DisplayName
-		r.FirstName = n.FirstName
-		r.LastName = n.LastName
-	}); err != nil {
-		return err
+	if _, err := c.api.UpdateUser(ctx, id, pid.UserChange{DisplayName: &n.DisplayName, FirstName: &n.FirstName, LastName: &n.LastName}); err != nil {
+		return wrap(err)
 	}
 	slog.Info("identity provider write", "action", "user.name", "user_id", id)
 	return nil
 }
 
-type groupDTO struct {
-	ID           string `json:"id"`
-	Name         string `json:"name"`
-	FriendlyName string `json:"friendlyName"`
-}
-
-func (g groupDTO) group() idp.Group {
-	return idp.Group{ID: g.ID, Name: g.Name, FriendlyName: g.FriendlyName}
-}
-
-// userGroupsRequest is the whole body of the group write,
-// PUT /api/users/:id/user-groups. Pocket ID replaces the user's groups with
-// exactly this list. Its one field, and the one place it is built, are pinned
-// by TestWriteSurface.
-type userGroupsRequest struct {
-	UserGroupIDs []string `json:"userGroupIds"`
-}
-
-// listGroups returns every group.
+// listGroups returns every group, a group without members included.
 func (c *Client) listGroups(ctx context.Context) ([]idp.Group, error) {
-	var out []idp.Group
-	for page := 1; ; page++ {
-		if page > maxPages {
-			return nil, fmt.Errorf("identity provider GET /api/user-groups: more than %d pages", maxPages)
-		}
-		q := url.Values{"pagination[page]": {fmt.Sprint(page)}, "pagination[limit]": {"100"}}
-		var res struct {
-			Data       []groupDTO `json:"data"`
-			Pagination struct {
-				TotalPages int `json:"totalPages"`
-			} `json:"pagination"`
-		}
-		if err := c.do(ctx, http.MethodGet, "/api/user-groups?"+q.Encode(), nil, &res); err != nil {
-			return nil, err
-		}
-		for _, g := range res.Data {
-			out = append(out, g.group())
-		}
-		if page >= res.Pagination.TotalPages {
-			return out, nil
-		}
+	gs, err := c.api.Groups(ctx)
+	if err != nil {
+		return nil, wrap(err)
 	}
+	out := make([]idp.Group, 0, len(gs))
+	for _, g := range gs {
+		out = append(out, toGroup(g))
+	}
+	return out, nil
 }
 
 // ListGroups returns every group, for the admins' groups page.
@@ -399,15 +252,13 @@ func (c *Client) ListGroups(ctx context.Context) ([]idp.Group, error) { return c
 
 // userGroups reads the user, GET /api/users/:id, for the groups it is in.
 func (c *Client) userGroups(ctx context.Context, id string) ([]idp.Group, error) {
-	var u struct {
-		UserGroups []groupDTO `json:"userGroups"`
-	}
-	if err := c.do(ctx, http.MethodGet, "/api/users/"+url.PathEscape(id), nil, &u); err != nil {
-		return nil, err
+	u, err := c.api.User(ctx, id)
+	if err != nil {
+		return nil, wrap(err)
 	}
 	out := make([]idp.Group, 0, len(u.UserGroups))
 	for _, g := range u.UserGroups {
-		out = append(out, g.group())
+		out = append(out, toGroup(g))
 	}
 	return out, nil
 }
@@ -418,7 +269,8 @@ func (c *Client) UserGroups(ctx context.Context, id string) ([]idp.Group, error)
 
 // ChangeGroups reads the user's groups afresh and writes them back with only
 // the requested change, so that a change another admin made in between to
-// any other group is kept. TestWriteSurface pins its shape.
+// any other group is kept. Pocket ID replaces the user's groups with exactly
+// the list sent. TestWriteSurface pins its shape.
 func (c *Client) ChangeGroups(ctx context.Context, id string, add, remove []string) (idp.GroupChange, error) {
 	all, err := c.listGroups(ctx)
 	if err != nil {
@@ -432,8 +284,8 @@ func (c *Client) ChangeGroups(ctx context.Context, id string, add, remove []stri
 	if err := checkGroups(before, next, all); err != nil {
 		return idp.GroupChange{}, err
 	}
-	if err := c.do(ctx, http.MethodPut, "/api/users/"+url.PathEscape(id)+"/user-groups", userGroupsRequest{UserGroupIDs: next}, nil); err != nil {
-		return idp.GroupChange{}, err
+	if err := c.api.SetUserGroups(ctx, id, next); err != nil {
+		return idp.GroupChange{}, wrap(err)
 	}
 	slog.Info("identity provider write", "action", "user.groups", "user_id", id)
 	after, err := c.userGroups(ctx, id)

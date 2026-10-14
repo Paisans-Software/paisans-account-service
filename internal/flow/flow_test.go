@@ -33,7 +33,7 @@ func setupStore(t *testing.T, approval bool) (*flow.Service, *idptest.Fake, *mai
 	m := &mailtest.Recorder{}
 	s := flow.New(st, f, m, coc.CoC{Version: "v1"}, flow.Settings{
 		Quota: 2, RequireApproval: approval, InviteLifetime: 14 * 24 * time.Hour,
-		PublicURL: "https://invite.example.org", EmailHashKey: make([]byte, 32), AdminGroup: "admins",
+		AccountURL: "https://account.example.org", InviteURL: "https://invite.example.org", EmailHashKey: make([]byte, 32), AdminGroup: "admins",
 	}, time.Now)
 	return s, f, m, st
 }
@@ -556,5 +556,23 @@ func TestUnrecordedAccountKeepsClaim(t *testing.T) {
 	}
 	if f.Created != 1 || f.LinksSent != 1 {
 		t.Fatalf("created=%d links=%d", f.Created, f.LinksSent)
+	}
+}
+
+func TestLinksUseTheirOwnHost(t *testing.T) {
+	s, _, m := setup(t, true)
+	link, _, err := s.CreateInvite(ctx, alice, flow.NewNonce())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(link, "https://invite.example.org/i/") {
+		t.Fatalf("invite link %q", link)
+	}
+	if _, err := s.Apply(ctx, token(t, link), bob()); err != nil {
+		t.Fatal(err)
+	}
+	notice := m.To("root@x.org")
+	if len(notice) != 1 || !strings.Contains(notice[0].Body, "https://account.example.org/admin\n") {
+		t.Fatalf("admin notice %+v", notice)
 	}
 }

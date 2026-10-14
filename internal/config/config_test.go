@@ -15,7 +15,7 @@ func env(over map[string]string) func(string) string {
 		"ACCOUNT_SESSION_KEY": key, "ACCOUNT_EMAIL_HASH_KEY": key,
 		"ACCOUNT_OIDC_ISSUER": "https://id.example.org", "ACCOUNT_OIDC_CLIENT_ID": "c", "ACCOUNT_OIDC_CLIENT_SECRET": "s",
 		"ACCOUNT_MEMBER_GROUP": "members", "ACCOUNT_ADMIN_GROUP": "admins",
-		"ACCOUNT_IDP_URL": "https://id.example.org", "ACCOUNT_IDP_API_KEY": "k",
+		"ACCOUNT_IDP_URL": "http://10.44.0.1:1413", "ACCOUNT_IDP_API_KEY": "k",
 		"ACCOUNT_SMTP_HOST": "mail", "ACCOUNT_SMTP_PORT": "587", "ACCOUNT_SMTP_FROM": "a@example.org", "ACCOUNT_SMTP_TLS": "starttls",
 	}
 	for k, v := range over {
@@ -141,5 +141,66 @@ func TestHosts(t *testing.T) {
 	}
 	if cfg.AccountHost() != "account.example.org" || cfg.JoinHost() != "join.example.org" {
 		t.Fatalf("hosts: %q %q", cfg.AccountHost(), cfg.JoinHost())
+	}
+}
+
+// ACCOUNT_IDP_URL carries the API key, which goes only to a private address:
+// a public one stops the service at startup, naming the variable.
+func TestIDPURLMustBePrivate(t *testing.T) {
+	for _, c := range []struct {
+		url, networks string
+		ok            bool
+	}{
+		{"http://10.44.0.1:1413", "", true},
+		{"http://100.70.0.1:1413", "", true},
+		{"http://[fd00::1]:1413", "", true},
+		{"http://127.0.0.1:1411", "", true},
+		{"http://localhost:1411", "", true},
+		{"http://pocket-id:1411", "", true},
+		{"http://203.0.113.5:1413", "203.0.113.0/24", true},
+		{"http://203.0.113.5:1413", "198.51.100.0/24, 203.0.113.0/24", true},
+		{"https://id.example.org", "", false},
+		{"http://203.0.113.5:1413", "", false},
+		{"http://203.0.113.5:1413", "198.51.100.0/24", false},
+		{"http://pocket-id.internal:1411", "", false},
+		{"http://[2001:db8::1]:1413", "", false},
+		{"not a url", "", false},
+		{"/api", "", false},
+	} {
+		cfg, err := Load(env(map[string]string{"ACCOUNT_IDP_URL": c.url, "ACCOUNT_IDP_PRIVATE_NETWORKS": c.networks}))
+		if c.ok && err != nil {
+			t.Errorf("%s (%s): %v", c.url, c.networks, err)
+		}
+		if !c.ok && (err == nil || !strings.Contains(err.Error(), "ACCOUNT_IDP_URL")) {
+			t.Errorf("%s (%s): want an error naming ACCOUNT_IDP_URL, got %v", c.url, c.networks, err)
+		}
+		if c.ok && c.networks != "" && len(cfg.IDPNetworks) == 0 {
+			t.Errorf("%s: networks not kept", c.networks)
+		}
+	}
+}
+
+func TestIDPPrivateNetworks(t *testing.T) {
+	cfg, err := Load(env(nil))
+	if err != nil || cfg.IDPNetworks != nil {
+		t.Fatalf("unset: %v %v", cfg.IDPNetworks, err)
+	}
+	cfg, err = Load(env(map[string]string{"ACCOUNT_IDP_PRIVATE_NETWORKS": " 203.0.113.0/24 ,198.51.100.0/24,"}))
+	if err != nil || fmt.Sprint(cfg.IDPNetworks) != "[203.0.113.0/24 198.51.100.0/24]" {
+		t.Fatalf("%v %v", cfg.IDPNetworks, err)
+	}
+	for _, bad := range []string{"203.0.113.5", "203.0.113.0/33", "mesh"} {
+		if _, err := Load(env(map[string]string{"ACCOUNT_IDP_PRIVATE_NETWORKS": bad})); err == nil || !strings.Contains(err.Error(), "ACCOUNT_IDP_PRIVATE_NETWORKS") {
+			t.Errorf("%q: %v", bad, err)
+		}
+	}
+}
+
+// Members are sent to Pocket ID at the issuer, its public URL: ACCOUNT_IDP_URL
+// is a private address no browser can reach.
+func TestIDPPublicURL(t *testing.T) {
+	cfg, err := Load(env(map[string]string{"ACCOUNT_OIDC_ISSUER": "https://id.example.org/"}))
+	if err != nil || cfg.IDPPublicURL() != "https://id.example.org" {
+		t.Fatalf("%q %v", cfg.IDPPublicURL(), err)
 	}
 }

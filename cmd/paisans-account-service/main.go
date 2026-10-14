@@ -91,7 +91,7 @@ func run() error {
 	f := flow.New(st, provider, sender, c, flow.Settings{
 		Quota: cfg.Quota, RequireApproval: cfg.RequireApproval, InviteLifetime: cfg.InviteLifetime,
 		AccountURL: cfg.AccountURL, JoinURL: cfg.JoinURL, EmailHashKey: cfg.EmailHashKey, AdminGroup: cfg.AdminGroup,
-		LoginLinkDays: cfg.LoginLinkDays, IDPURL: cfg.IDPURL, Operators: cfg.Operators,
+		LoginLinkDays: cfg.LoginLinkDays, IDPURL: cfg.IDPPublicURL(), Operators: cfg.Operators,
 	}, time.Now)
 	handler, err := web.New(ctx, cfg, f, st)
 	if err != nil {

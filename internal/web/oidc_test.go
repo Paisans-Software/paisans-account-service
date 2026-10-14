@@ -12,11 +12,17 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/paisans-software/paisans-account-service/internal/coc"
 	"github.com/paisans-software/paisans-account-service/internal/config"
+	"github.com/paisans-software/paisans-account-service/internal/flow"
+	"github.com/paisans-software/paisans-account-service/internal/idp/idptest"
+	"github.com/paisans-software/paisans-account-service/internal/mail/mailtest"
+	"github.com/paisans-software/paisans-account-service/internal/store/storetest"
 )
 
 // fakeOP is a minimal OpenID provider: discovery, JWKS and a token endpoint
@@ -224,5 +230,29 @@ func TestSignInRefusals(t *testing.T) {
 		if _, ok := sessionFrom(a, rec); ok {
 			t.Errorf("%s: session set", name)
 		}
+	}
+}
+
+// New links members to Pocket ID at the issuer, its public URL, and never at
+// ACCOUNT_IDP_URL, the private address the API key goes to.
+func TestNewLinksToTheIssuer(t *testing.T) {
+	op := newFakeOP(t)
+	st := storetest.New(t)
+	f := flow.New(st, &idptest.Fake{}, &mailtest.Recorder{}, coc.CoC{Version: "v", HTML: "<p>Be kind</p>"}, flow.Settings{
+		Quota: 1, InviteLifetime: time.Hour, EmailHashKey: make([]byte, 32), AdminGroup: "admins",
+		AccountURL: "https://" + accountHost, JoinURL: "https://" + joinHost, LoginLinkDays: 7, IDPURL: op.srv.URL,
+	}, time.Now)
+	cfg := config.Config{OIDCIssuer: op.srv.URL, OIDCClientID: "invite", OIDCClientSecret: "secret",
+		AccountURL: "https://" + accountHost, JoinURL: "https://" + joinHost, Signup: config.SignupOpen,
+		MemberGroup: "members", AdminGroup: "admins", SessionKey: make([]byte, 32), IDPURL: "http://10.44.0.1:1413"}
+	h, err := New(context.Background(), cfg, f, st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "http://"+joinHost+"/", nil))
+	page := rec.Body.String() + rec.Header().Get("Content-Security-Policy")
+	if !strings.Contains(page, op.srv.URL+"/api/application-images/logo") || strings.Contains(page, "10.44.0.1") {
+		t.Fatalf("the page must take Pocket ID's address from the issuer:\n%s", page)
 	}
 }

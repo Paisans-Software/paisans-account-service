@@ -55,8 +55,9 @@ type Settings struct {
 	// LoginLinkDays is the sign-in link's lifetime, the one the provider
 	// client was built with, for the pages that state it.
 	LoginLinkDays int
-	// IDPURL is the identity provider as members reach it, for mail that
-	// sends someone there to sign in.
+	// IDPURL is the identity provider as members reach it, its public URL
+	// (config.Config.IDPPublicURL), for mail that sends someone there to
+	// sign in. It is never ACCOUNT_IDP_URL, which is a private address.
 	IDPURL string
 	// Operators are the usernames the deployment declares as operators: the
 	// service never bans them or changes their address or name.

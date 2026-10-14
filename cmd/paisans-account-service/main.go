@@ -1,5 +1,6 @@
-// Command paisans-account-service is the community's account service: invites
-// and their approval today. See the README for its environment.
+// Command paisans-account-service is the community's account service:
+// signup and its approval, bans, and account recovery. See the README for its
+// environment.
 package main
 
 import (
@@ -75,7 +76,7 @@ func run() error {
 	if err := st.Migrate(ctx); err != nil {
 		return err
 	}
-	c, err := codeOfConduct(cfg)
+	c, err := coc.Load(cfg.CoCPath)
 	if err != nil {
 		return err
 	}
@@ -89,16 +90,16 @@ func run() error {
 	}
 	f := flow.New(st, provider, sender, c, flow.Settings{
 		Quota: cfg.Quota, RequireApproval: cfg.RequireApproval, InviteLifetime: cfg.InviteLifetime,
-		AccountURL: cfg.AccountURL, InviteURL: cfg.InviteURL, EmailHashKey: cfg.EmailHashKey, AdminGroup: cfg.AdminGroup,
-		LoginLinkDays: cfg.LoginLinkDays,
+		AccountURL: cfg.AccountURL, JoinURL: cfg.JoinURL, EmailHashKey: cfg.EmailHashKey, AdminGroup: cfg.AdminGroup,
+		LoginLinkDays: cfg.LoginLinkDays, IDPURL: cfg.IDPURL, Operators: cfg.Operators,
 	}, time.Now)
 	handler, err := web.New(ctx, cfg, f, st)
 	if err != nil {
 		return err
 	}
 
-	// The sweeper runs whether or not invites are on: invites issued before
-	// they were turned off still expire, and their applications still age out.
+	// The sweeper runs in either signup mode: invites issued under invite
+	// signup still expire after a switch to open.
 	go sweep(ctx, st, cfg)
 
 	srv := &http.Server{Addr: cfg.ListenAddr, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
@@ -112,22 +113,12 @@ func run() error {
 			slog.Warn("shutdown", "error", err)
 		}
 	}()
-	slog.Info("listening", "addr", cfg.ListenAddr, "invites", cfg.Invites, "coc_version", c.Version, "require_approval", cfg.RequireApproval)
+	slog.Info("listening", "addr", cfg.ListenAddr, "signup", cfg.Signup, "coc_version", c.Version, "require_approval", cfg.RequireApproval)
 	if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
 	<-done
 	return nil
-}
-
-// codeOfConduct loads the code of conduct invitees agree to. With invites
-// off nobody is shown it and the deployment mounts none, so there is nothing
-// to load.
-func codeOfConduct(cfg config.Config) (coc.CoC, error) {
-	if !cfg.Invites {
-		return coc.CoC{}, nil
-	}
-	return coc.Load(cfg.CoCPath)
 }
 
 func sweep(ctx context.Context, st *store.Store, cfg config.Config) {

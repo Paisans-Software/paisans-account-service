@@ -18,6 +18,7 @@ var decisionErrors = map[string]string{
 	"email_taken":    "An account already uses that email address.",
 	"not_found":      "That application no longer exists.",
 	"busy":           "Someone else is deciding this application; refresh in a moment.",
+	"banned":         "That address is banned. Decline the application.",
 	"forbidden":      "Only admins can do that.",
 	"failed":         "That did not work. The identity provider or database may be unavailable; try again.",
 }
@@ -28,6 +29,8 @@ func decisionCode(err error) string {
 		return "username_taken"
 	case errors.Is(err, flow.ErrEmailTaken):
 		return "email_taken"
+	case errors.Is(err, flow.ErrBanned):
+		return "banned"
 	case errors.Is(err, store.ErrNotFound):
 		return "not_found"
 	case errors.Is(err, store.ErrBusy):
@@ -38,16 +41,12 @@ func decisionCode(err error) string {
 	return "failed"
 }
 
-// queue is the admin page. With invites off there is no application queue,
-// so it renders with nothing to act on.
+// queue is the admin page: the applications waiting for a decision.
 func (s *server) queue(w http.ResponseWriter, r *http.Request, sess Session) {
-	var p []flow.Pending
-	if s.Invites {
-		var err error
-		if p, err = s.Flow.Pending(r.Context()); err != nil {
-			s.fail(w, err)
-			return
-		}
+	p, err := s.Flow.Pending(r.Context())
+	if err != nil {
+		s.fail(w, err)
+		return
 	}
 	v := view{Title: "Applications", Session: &sess, CSRF: sess.CSRF, Data: p, Error: decisionErrors[r.URL.Query().Get("error")]}
 	s.Render.page(w, 200, "admin.html", v)

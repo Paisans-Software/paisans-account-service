@@ -20,6 +20,8 @@ var staticFS embed.FS
 var accentRule = regexp.MustCompile(`^(#[0-9a-fA-F]{3,8}|[a-zA-Z]+|(rgb|hsl|oklch)a?\([0-9.,%\s/]+\))$`)
 
 type view struct {
+	// Notice is a server-chosen line of good news above the content.
+	Notice               string
 	Title, LogoURL, CSRF string
 	Accent               template.CSS
 	Session              *Session
@@ -58,7 +60,8 @@ func newRenderer(accent, idpURL string) (*renderer, error) {
 	if !strings.EqualFold(accent, "default") && accentRule.MatchString(accent) {
 		r.accent = template.CSS(accent)
 	}
-	for _, name := range []string{"home.html", "admin.html", "invite.html", "message.html"} {
+	for _, name := range []string{"home.html", "admin.html", "invite.html", "message.html",
+		"members.html", "ban.html", "bans.html", "email.html", "name.html", "recovery.html"} {
 		t, err := template.ParseFS(templateFS, "templates/layout.html", "templates/"+name)
 		if err != nil {
 			return nil, err

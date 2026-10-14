@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/paisans-software/paisans-account-service/internal/config"
 	"github.com/paisans-software/paisans-account-service/internal/flow"
 	"github.com/paisans-software/paisans-account-service/internal/store"
 )
@@ -25,7 +26,7 @@ type homeData struct {
 const alreadyMade = "That invite was already made. It's in your list below. If you didn't copy the link, revoke it and make a new one."
 
 func (s *server) homeView(r *http.Request, sess Session, extra homeData) (homeData, error) {
-	if !s.Invites {
+	if s.Signup != config.SignupInvite {
 		return homeData{}, nil
 	}
 	extra.InvitesOn = true

@@ -103,9 +103,10 @@ func TestContract(t *testing.T) {
 	}
 }
 
-// The update write sends every field back as read: disabling and re-enabling
-// a user, and setting its address or name, change nothing else, and Pocket ID
-// accepts the body.
+// pocketid-go's UpdateUser sends every field back as read: disabling and
+// re-enabling a user, and setting its address or name, change nothing else,
+// and Pocket ID accepts the body. The admin flag, the username and the groups
+// are unchanged after every update, for an administrator and for anyone else.
 func TestContractUpdate(t *testing.T) {
 	base, key := os.Getenv("CONTRACT_IDP_URL"), os.Getenv("CONTRACT_API_KEY")
 	c, err := New(base, key, &http.Client{Timeout: 10 * time.Second}, 7*24*time.Hour)
@@ -124,9 +125,30 @@ func TestContractUpdate(t *testing.T) {
 		api(t, base, key, http.MethodGet, "/api/users/"+u.ID, nil, &m)
 		return m
 	}
+	// A second group besides the signup default, so that a write which
+	// dropped or reset the groups would show.
+	var extra struct {
+		ID string `json:"id"`
+	}
+	api(t, base, key, http.MethodPost, "/api/user-groups", map[string]any{"name": name + "-extra", "friendlyName": "Extra"}, &extra)
+	api(t, base, key, http.MethodPut, "/api/users/"+u.ID+"/user-groups", map[string]any{"userGroupIds": []string{os.Getenv("CONTRACT_GROUP_ID"), extra.ID}}, nil)
 	before := read()
+	if gs, _ := before["userGroups"].([]any); len(gs) != 2 {
+		t.Fatalf("want two groups before the updates, got %v", before["userGroups"])
+	}
+	// kept checks what no update may change, against the user as first read.
+	first := before
+	kept := func(after map[string]any) {
+		t.Helper()
+		for _, k := range []string{"isAdmin", "username", "userGroups"} {
+			if fmt.Sprint(after[k]) != fmt.Sprint(first[k]) {
+				t.Errorf("an update changed %s: %v -> %v", k, first[k], after[k])
+			}
+		}
+	}
 	same := func(after map[string]any, changed ...string) {
 		t.Helper()
+		kept(after)
 		skip := map[string]bool{"userGroups": true, "customClaims": true}
 		for _, k := range changed {
 			skip[k] = true
@@ -179,6 +201,43 @@ func TestContractUpdate(t *testing.T) {
 		t.Fatalf("name not set: %v", after)
 	}
 	same(after, "displayName", "firstName", "lastName")
+
+	if after["isAdmin"] != false {
+		t.Fatalf("a non-admin's update promoted them: %v", after)
+	}
+
+	// An administrator's update keeps them one: isAdmin goes back as read.
+	promoted := read()
+	promoted["isAdmin"] = true
+	api(t, base, key, http.MethodPut, "/api/users/"+u.ID, promoted, nil)
+	before = read()
+	if before["isAdmin"] != true {
+		t.Fatalf("not promoted for the test: %v", before)
+	}
+	if err := c.SetDisabled(ctx, u.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	after = read()
+	if after["isAdmin"] != true || after["disabled"] != true {
+		t.Fatalf("an admin's update changed the admin flag: %v", after)
+	}
+	first = before
+	same(after, "disabled")
+	for _, set := range []func() error{
+		func() error { return c.SetEmail(ctx, u.ID, name+".admin@example.org") },
+		func() error {
+			return c.SetName(ctx, u.ID, idp.Name{DisplayName: "Admin", FirstName: "Ad", LastName: "Min"})
+		},
+		func() error { return c.SetDisabled(ctx, u.ID, false) },
+	} {
+		if err := set(); err != nil {
+			t.Fatal(err)
+		}
+		if after = read(); after["isAdmin"] != true {
+			t.Fatalf("an admin's update changed the admin flag: %v", after)
+		}
+		kept(after)
+	}
 
 	if _, err := c.GetUser(ctx, "00000000-0000-0000-0000-00000000dead"); !errors.Is(err, idp.ErrNotFound) {
 		t.Fatalf("missing user: %v", err)
@@ -243,6 +302,19 @@ func TestContractGroups(t *testing.T) {
 		delete(m, "userGroups")
 		return m
 	}
+	// ListGroups is every group, one nobody is in included.
+	all, err := c.ListGroups(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed := map[string]bool{}
+	for _, g := range all {
+		listed[g.ID] = true
+	}
+	if !listed[g1] || !listed[g2] || !listed[ops] || !listed[members] {
+		t.Fatalf("ListGroups leaves out a group: %+v", all)
+	}
+
 	before, otherBefore := read(u.ID), ids(other.ID)
 	if ids(u.ID) != members {
 		t.Fatalf("want the default group only, got %s", ids(u.ID))

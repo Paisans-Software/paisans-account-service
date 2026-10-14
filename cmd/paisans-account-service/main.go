@@ -84,14 +84,14 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	provider, err := pocketid.New(cfg.IDPURL, cfg.IDPAPIKey, &http.Client{Timeout: 15 * time.Second}, time.Duration(cfg.LoginLinkDays)*24*time.Hour)
+	provider, err := pocketid.New(cfg.IDPURL, cfg.IDPAPIKey, &http.Client{Timeout: 15 * time.Second}, time.Duration(cfg.LoginLinkDays)*24*time.Hour, cfg.IDPNetworks...)
 	if err != nil {
 		return err
 	}
 	f := flow.New(st, provider, sender, c, flow.Settings{
 		Quota: cfg.Quota, RequireApproval: cfg.RequireApproval, InviteLifetime: cfg.InviteLifetime,
 		AccountURL: cfg.AccountURL, JoinURL: cfg.JoinURL, EmailHashKey: cfg.EmailHashKey, AdminGroup: cfg.AdminGroup,
-		LoginLinkDays: cfg.LoginLinkDays, IDPURL: cfg.IDPURL, Operators: cfg.Operators,
+		LoginLinkDays: cfg.LoginLinkDays, IDPURL: cfg.IDPPublicURL(), Operators: cfg.Operators,
 	}, time.Now)
 	handler, err := web.New(ctx, cfg, f, st)
 	if err != nil {

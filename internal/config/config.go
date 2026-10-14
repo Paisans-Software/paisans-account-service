@@ -1,17 +1,19 @@
 // Package config reads the service's environment. The variable names are the
-// contract with paisans-stack's `account` blueprint.
+// contract with the Paisans toolkit's `account` blueprint.
 package config
 
 import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"net/netip"
 	"net/url"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/paisans-software/paisans-account-service/internal/idp"
+	pid "github.com/paisans-software/pocketid-go"
 )
 
 type SMTP struct {
@@ -39,13 +41,18 @@ type Config struct {
 	SessionKey, EmailHashKey                   []byte
 	OIDCIssuer, OIDCClientID, OIDCClientSecret string
 	MemberGroup, AdminGroup                    string
-	IDPURL, IDPAPIKey                          string
-	SMTP                                       SMTP
-	AccentColor                                string
-	Quota                                      int
-	RequireApproval                            bool
-	InviteLifetime, ApplicationWait            time.Duration
-	DeclineRetention                           time.Duration
+	// IDPURL is Pocket ID's API, which the key is sent to: a private
+	// address, as pocketid-go's Private judges it with IDPNetworks.
+	IDPURL, IDPAPIKey string
+	// IDPNetworks are further networks ACCOUNT_IDP_URL may be in, from
+	// ACCOUNT_IDP_PRIVATE_NETWORKS, for a mesh outside the private ranges.
+	IDPNetworks                     []netip.Prefix
+	SMTP                            SMTP
+	AccentColor                     string
+	Quota                           int
+	RequireApproval                 bool
+	InviteLifetime, ApplicationWait time.Duration
+	DeclineRetention                time.Duration
 	// LoginLinkDays is how long the identity provider's sign-in link lasts.
 	// Pocket ID accepts at most 744h, which is 31 days.
 	LoginLinkDays  int
@@ -136,6 +143,26 @@ func Load(getenv func(string) string) (Config, error) {
 	default:
 		errs = append(errs, errors.New("ACCOUNT_SIGNUP must be invite or open"))
 	}
+	for _, n := range strings.Split(getenv("ACCOUNT_IDP_PRIVATE_NETWORKS"), ",") {
+		n = strings.TrimSpace(n)
+		if n == "" {
+			continue
+		}
+		p, err := netip.ParsePrefix(n)
+		if err != nil {
+			errs = append(errs, errors.New("ACCOUNT_IDP_PRIVATE_NETWORKS must be CIDR networks separated by commas"))
+			c.IDPNetworks = nil
+			break
+		}
+		c.IDPNetworks = append(c.IDPNetworks, p.Masked())
+	}
+	if c.IDPURL != "" {
+		if u, err := url.Parse(c.IDPURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			errs = append(errs, errors.New("ACCOUNT_IDP_URL must be an absolute http or https URL"))
+		} else if !pid.Private(u.Hostname(), c.IDPNetworks...) {
+			errs = append(errs, fmt.Errorf("ACCOUNT_IDP_URL must be a private address, and %s is not: the API key is sent only to a loopback, RFC 1918, RFC 6598 or IPv6 unique local address, a network in ACCOUNT_IDP_PRIVATE_NETWORKS, or a hostname without a dot", u.Hostname()))
+		}
+	}
 	c.JoinURL = req("ACCOUNT_JOIN_PUBLIC_URL")
 	for _, u := range []struct{ name, value string }{
 		{"ACCOUNT_PUBLIC_URL", c.AccountURL},
@@ -163,6 +190,10 @@ func Load(getenv func(string) string) (Config, error) {
 	}
 	return c, errors.Join(errs...)
 }
+
+// IDPPublicURL is Pocket ID as members reach it, its issuer: the logo, and
+// the links pages and mail send people to.
+func (c Config) IDPPublicURL() string { return strings.TrimRight(c.OIDCIssuer, "/") }
 
 // AccountHost is the host members and admins use, lowercase and without a port.
 func (c Config) AccountHost() string { return hostOf(c.AccountURL) }

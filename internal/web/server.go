@@ -50,7 +50,7 @@ func New(ctx context.Context, cfg config.Config, f *flow.Service, health pinger)
 	auth := http.NewServeMux()
 	auth.HandleFunc("GET /auth/login", a.login)
 	auth.HandleFunc("GET /auth/callback", a.callback)
-	r, err := newRenderer(cfg.AccentColor, cfg.IDPURL)
+	r, err := newRenderer(cfg.AccentColor, cfg.IDPPublicURL())
 	if err != nil {
 		return nil, err
 	}

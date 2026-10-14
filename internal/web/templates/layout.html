@@ -9,5 +9,8 @@
 <body><main>
 <header><img src="{{.LogoURL}}" alt=""><span>{{if .Session}}Signed in as {{.Session.Username}}{{end}}</span></header>
 {{if .Error}}<div class="alert error" role="alert">{{.Error}}</div>{{end}}
+{{if .Notice}}<div class="alert" role="status">{{.Notice}}</div>{{end}}
 {{template "content" .}}
 </main></body></html>{{end}}
+
+{{define "adminnav"}}<p class="muted"><a href="/admin">Applications</a> · <a href="/admin/members">Members</a> · <a href="/admin/bans">Bans</a> · <a href="/admin/recovery">Recovery</a> · <a href="/">Your account</a></p>{{end}}

@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/paisans-software/paisans-account-service/internal/idp"
 )
 
 type SMTP struct {
@@ -25,11 +27,15 @@ type Config struct {
 	ListenAddr, DatabaseURL string
 	// AccountURL is where members and admins sign in, from ACCOUNT_PUBLIC_URL.
 	AccountURL string
-	// Invites registers the invite routes and the invite UI.
-	Invites bool
-	// InviteURL is where invitees open their links, from
-	// ACCOUNT_INVITE_PUBLIC_URL; empty with invites off.
-	InviteURL                                  string
+	// Signup is how people join: "invite" (a member's invite link) or
+	// "open" (a registration page).
+	Signup string
+	// JoinURL is where people without an account sign up, from
+	// ACCOUNT_JOIN_PUBLIC_URL.
+	JoinURL string
+	// Operators are the usernames declared as operators in the deployment.
+	// The service refuses to ban them or change their address or name.
+	Operators                                  []string
 	SessionKey, EmailHashKey                   []byte
 	OIDCIssuer, OIDCClientID, OIDCClientSecret string
 	MemberGroup, AdminGroup                    string
@@ -122,23 +128,18 @@ func Load(getenv func(string) string) (Config, error) {
 	default:
 		errs = append(errs, errors.New("ACCOUNT_SMTP_TLS must be none, starttls or tls"))
 	}
-	invites := getenv("ACCOUNT_INVITES")
-	switch invites {
-	case "true", "false":
+	c.Signup = getenv("ACCOUNT_SIGNUP")
+	switch c.Signup {
+	case SignupInvite, SignupOpen:
+	case "":
+		errs = append(errs, errors.New("ACCOUNT_SIGNUP is required"))
 	default:
-		errs = append(errs, errors.New("ACCOUNT_INVITES must be true or false"))
+		errs = append(errs, errors.New("ACCOUNT_SIGNUP must be invite or open"))
 	}
-	c.Invites = invites == "true"
-	c.InviteURL = getenv("ACCOUNT_INVITE_PUBLIC_URL")
-	switch {
-	case c.Invites && c.InviteURL == "":
-		errs = append(errs, errors.New("ACCOUNT_INVITE_PUBLIC_URL is required when ACCOUNT_INVITES is true"))
-	case !c.Invites && c.InviteURL != "":
-		errs = append(errs, errors.New("ACCOUNT_INVITE_PUBLIC_URL must be unset when ACCOUNT_INVITES is false"))
-	}
+	c.JoinURL = req("ACCOUNT_JOIN_PUBLIC_URL")
 	for _, u := range []struct{ name, value string }{
 		{"ACCOUNT_PUBLIC_URL", c.AccountURL},
-		{"ACCOUNT_INVITE_PUBLIC_URL", c.InviteURL},
+		{"ACCOUNT_JOIN_PUBLIC_URL", c.JoinURL},
 	} {
 		if strings.HasSuffix(u.value, "/") {
 			errs = append(errs, fmt.Errorf("%s must not end in /", u.name))
@@ -146,8 +147,19 @@ func Load(getenv func(string) string) (Config, error) {
 	}
 	// Every route is registered on one of the two hosts, so one host for
 	// both would make them collide.
-	if c.InviteURL != "" && c.AccountHost() == c.InviteHost() {
-		errs = append(errs, errors.New("ACCOUNT_PUBLIC_URL and ACCOUNT_INVITE_PUBLIC_URL must be different hosts"))
+	if c.JoinURL != "" && c.AccountHost() == c.JoinHost() {
+		errs = append(errs, errors.New("ACCOUNT_PUBLIC_URL and ACCOUNT_JOIN_PUBLIC_URL must be different hosts"))
+	}
+	for _, name := range strings.Split(getenv("ACCOUNT_OPERATORS"), ",") {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		if len(name) > idp.MaxUsername || !idp.UsernameRule.MatchString(name) {
+			errs = append(errs, errors.New("ACCOUNT_OPERATORS must be usernames separated by commas"))
+			break
+		}
+		c.Operators = append(c.Operators, name)
 	}
 	return c, errors.Join(errs...)
 }
@@ -155,8 +167,14 @@ func Load(getenv func(string) string) (Config, error) {
 // AccountHost is the host members and admins use, lowercase and without a port.
 func (c Config) AccountHost() string { return hostOf(c.AccountURL) }
 
-// InviteHost is the host invitees use, or "" with invites off.
-func (c Config) InviteHost() string { return hostOf(c.InviteURL) }
+// JoinHost is the host people without an account sign up on.
+func (c Config) JoinHost() string { return hostOf(c.JoinURL) }
+
+// The values of ACCOUNT_SIGNUP.
+const (
+	SignupInvite = "invite"
+	SignupOpen   = "open"
+)
 
 func hostOf(raw string) string {
 	u, err := url.Parse(raw)

@@ -1,0 +1,12 @@
+{{define "content"}}
+<div class="card"><h1>Name</h1>
+<p>Your username is {{.Data.Username}}; it never changes.</p>
+{{if .Data.Operator}}<p>Operators change their name in the deployment's configuration.</p>{{else}}
+<form method="post"><input type="hidden" name="csrf" value="{{.CSRF}}">
+<label for="display_name">Display name</label><input type="text" id="display_name" name="display_name" value="{{.Data.Name.DisplayName}}" maxlength="100" required autocomplete="nickname">
+<label for="first_name">First name</label><input type="text" id="first_name" name="first_name" value="{{.Data.Name.FirstName}}" maxlength="50" autocomplete="given-name">
+<label for="last_name">Last name</label><input type="text" id="last_name" name="last_name" value="{{.Data.Name.LastName}}" maxlength="50" autocomplete="family-name">
+<p><button>Save</button></p></form>{{end}}
+</div>
+<p><a href="/">Back to your account</a></p>
+{{end}}

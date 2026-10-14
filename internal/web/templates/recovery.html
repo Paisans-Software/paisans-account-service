@@ -1,0 +1,22 @@
+{{define "content"}}
+<div class="card"><h1>Recover an account</h1>
+<p>For a member who has lost both their passkey and their email address. Another admin must approve the request within 48 hours; approval sets the new address and Pocket ID emails a sign-in link to it.</p>
+<form method="post" action="/admin/recovery"><input type="hidden" name="csrf" value="{{.CSRF}}">
+<label for="username">Username</label><input type="text" id="username" name="username" value="{{.Data.Username}}" maxlength="50" required autocomplete="off">
+<label for="email">New email address</label><input type="email" id="email" name="email" value="{{.Data.Email}}" required autocomplete="off">
+<label for="reason">How you confirmed who they are</label><input type="text" id="reason" name="reason" value="{{.Data.Reason}}" maxlength="1000" required>
+<p><button>Open a request</button></p></form>
+</div>
+<div class="card"><h2>Requests</h2>
+{{if .Data.Rows}}<table><tr><th>Member</th><th>New address</th><th>Opened</th><th></th></tr>
+{{range .Data.Rows}}<tr>
+<td>{{.Username}}</td>
+<td>{{.NewEmail}}<br><span class="muted">{{.Reason}}</span></td>
+<td>{{.OpenedAt.Format "2 Jan 2006 15:04"}} by {{.OpenedBy}}</td>
+<td>{{if .Live}}{{if ne .OpenedBySub $.Data.Sub}}<form class="inline" method="post" action="/admin/recovery/{{.ID}}/approve"><input type="hidden" name="csrf" value="{{$.CSRF}}"><button>Approve</button></form>{{else}}<p class="muted">Waiting for another admin.</p>{{end}}
+<form class="inline" method="post" action="/admin/recovery/{{.ID}}/cancel"><input type="hidden" name="csrf" value="{{$.CSRF}}"><button class="secondary">Cancel</button></form>
+{{else if .Expired}}<span class="muted">expired</span>{{else}}<span class="muted">{{.State}}{{with .ApprovedBy}} by {{.}}{{end}}</span>{{end}}</td>
+</tr>{{end}}</table>{{else}}<p class="muted">No requests.</p>{{end}}
+</div>
+{{template "adminnav"}}
+{{end}}

@@ -1,6 +1,7 @@
 {{define "content"}}
-<div class="card"><h1>You have been invited</h1>
-<p>{{.Data.Inviter}} invited you. Please read the code of conduct first.</p>
+<div class="card">{{if .Data.Open}}<h1>Join</h1>
+<p>Please read the code of conduct first.</p>{{else}}<h1>You have been invited</h1>
+<p>{{.Data.Inviter}} invited you. Please read the code of conduct first.</p>{{end}}
 <div class="coc">{{.Data.CoC}}</div>
 <form method="post">
 <input type="hidden" name="csrf" value="{{.CSRF}}">

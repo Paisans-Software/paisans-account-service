@@ -19,7 +19,11 @@ type Fake struct {
 	Groups                   map[string][]string
 	FailCreate, FailSendLink error
 	// FailLookup makes every read fail, as an unreachable provider would.
-	FailLookup         error
+	FailLookup error
+	// FailUpdate makes every update fail.
+	FailUpdate error
+	// LinksTo lists the user IDs each sign-in link was sent to, in order.
+	LinksTo            []string
 	Created, LinksSent int
 	// OnCreate, if set, runs at the start of CreateUser, outside the lock, so
 	// a test can act while an approval is in progress.
@@ -94,7 +98,7 @@ func (f *Fake) CreateUser(_ context.Context, n idp.NewUser) (idp.User, error) {
 		return idp.User{}, f.FailCreate
 	}
 	f.Created++
-	u := idp.User{ID: fmt.Sprintf("id-%d", f.Created), Username: n.Username, Email: strings.TrimSpace(n.Email)}
+	u := idp.User{ID: fmt.Sprintf("id-%d", f.Created), Username: n.Username, Email: strings.TrimSpace(n.Email), DisplayName: n.DisplayName}
 	f.Users = append(f.Users, u)
 	if after := f.AfterCreate; after != nil {
 		f.mu.Unlock()
@@ -104,7 +108,7 @@ func (f *Fake) CreateUser(_ context.Context, n idp.NewUser) (idp.User, error) {
 	return u, nil
 }
 
-func (f *Fake) SendLoginLink(context.Context, string) error {
+func (f *Fake) SendLoginLink(_ context.Context, id string) error {
 	if f.OnSendLink != nil {
 		f.OnSendLink()
 	}
@@ -114,10 +118,69 @@ func (f *Fake) SendLoginLink(context.Context, string) error {
 		return f.FailSendLink
 	}
 	f.LinksSent++
+	f.LinksTo = append(f.LinksTo, id)
 	if after := f.AfterSendLink; after != nil {
 		f.mu.Unlock()
 		after()
 		f.mu.Lock()
 	}
 	return nil
+}
+
+func (f *Fake) ListUsers(context.Context) ([]idp.User, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.FailLookup != nil {
+		return nil, f.FailLookup
+	}
+	return append([]idp.User(nil), f.Users...), nil
+}
+
+func (f *Fake) GetUser(_ context.Context, id string) (idp.User, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.FailLookup != nil {
+		return idp.User{}, f.FailLookup
+	}
+	for _, u := range f.Users {
+		if u.ID == id {
+			return u, nil
+		}
+	}
+	return idp.User{}, idp.ErrNotFound
+}
+
+// User returns the user with id as the fake holds it now.
+func (f *Fake) User(id string) idp.User {
+	u, _ := f.GetUser(context.Background(), id)
+	return u
+}
+
+func (f *Fake) update(id string, change func(*idp.User)) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.FailUpdate != nil {
+		return f.FailUpdate
+	}
+	for i := range f.Users {
+		if f.Users[i].ID == id {
+			change(&f.Users[i])
+			return nil
+		}
+	}
+	return idp.ErrNotFound
+}
+
+func (f *Fake) SetDisabled(_ context.Context, id string, disabled bool) error {
+	return f.update(id, func(u *idp.User) { u.Disabled = disabled })
+}
+
+func (f *Fake) SetEmail(_ context.Context, id, email string) error {
+	return f.update(id, func(u *idp.User) { u.Email = strings.TrimSpace(email) })
+}
+
+func (f *Fake) SetName(_ context.Context, id string, n idp.Name) error {
+	return f.update(id, func(u *idp.User) {
+		u.DisplayName, u.FirstName, u.LastName = n.DisplayName, n.FirstName, n.LastName
+	})
 }

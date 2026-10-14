@@ -37,7 +37,7 @@ func TestSweep(t *testing.T) {
 	if want := map[string]string{fmt.Sprint(old.ID): "expired", fmt.Sprint(app.ID): "expired", fmt.Sprint(dec.ID): "declined"}; !reflect.DeepEqual(states, want) {
 		t.Fatalf("invite states: got %v, want %v", states, want)
 	}
-	if got, _ := s.AuditSubjects(ctx, "sweep"); len(got) != 1 || got[0] != "invites=1 applications=1 declines=1" {
+	if got, _ := s.AuditSubjects(ctx, "sweep"); len(got) != 1 || got[0] != "invites=1 applications=1 declines=1 recoveries=0 email_changes=0" {
 		t.Fatalf("sweep audit: %v", got)
 	}
 	// A sweep with nothing to do writes no audit row.

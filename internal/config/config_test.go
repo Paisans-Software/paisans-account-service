@@ -11,7 +11,7 @@ import (
 func env(over map[string]string) func(string) string {
 	key := base64.RawURLEncoding.EncodeToString(make([]byte, 32))
 	base := map[string]string{
-		"ACCOUNT_PUBLIC_URL": "https://account.example.org", "ACCOUNT_INVITES": "true", "ACCOUNT_INVITE_PUBLIC_URL": "https://invite.example.org", "ACCOUNT_DATABASE_URL": "postgres://x",
+		"ACCOUNT_PUBLIC_URL": "https://account.example.org", "ACCOUNT_SIGNUP": "invite", "ACCOUNT_JOIN_PUBLIC_URL": "https://join.example.org", "ACCOUNT_DATABASE_URL": "postgres://x",
 		"ACCOUNT_SESSION_KEY": key, "ACCOUNT_EMAIL_HASH_KEY": key,
 		"ACCOUNT_OIDC_ISSUER": "https://id.example.org", "ACCOUNT_OIDC_CLIENT_ID": "c", "ACCOUNT_OIDC_CLIENT_SECRET": "s",
 		"ACCOUNT_MEMBER_GROUP": "members", "ACCOUNT_ADMIN_GROUP": "admins",
@@ -91,21 +91,21 @@ func TestLoginLinkDays(t *testing.T) {
 	}
 }
 
-func TestInvitesURLs(t *testing.T) {
+func TestSignupAndJoinURL(t *testing.T) {
 	cases := []struct {
 		name    string
 		set     map[string]string
 		wantErr string
 	}{
-		{"invites on, both urls", nil, ""},
-		{"invites unset", map[string]string{"ACCOUNT_INVITES": ""}, "ACCOUNT_INVITES"},
-		{"invites not a bool", map[string]string{"ACCOUNT_INVITES": "yes"}, "ACCOUNT_INVITES"},
-		{"invites on, no invite url", map[string]string{"ACCOUNT_INVITE_PUBLIC_URL": ""}, "ACCOUNT_INVITE_PUBLIC_URL"},
-		{"invites off, invite url set", map[string]string{"ACCOUNT_INVITES": "false"}, "ACCOUNT_INVITE_PUBLIC_URL"},
-		{"invites off, no invite url", map[string]string{"ACCOUNT_INVITES": "false", "ACCOUNT_INVITE_PUBLIC_URL": ""}, ""},
-		{"invite url trailing slash", map[string]string{"ACCOUNT_INVITE_PUBLIC_URL": "https://invite.example.org/"}, "ACCOUNT_INVITE_PUBLIC_URL must not end in /"},
+		{"invite", nil, ""},
+		{"open", map[string]string{"ACCOUNT_SIGNUP": "open"}, ""},
+		{"signup unset", map[string]string{"ACCOUNT_SIGNUP": ""}, "ACCOUNT_SIGNUP"},
+		{"signup not a mode", map[string]string{"ACCOUNT_SIGNUP": "true"}, "ACCOUNT_SIGNUP must be invite or open"},
+		{"join url unset, invite", map[string]string{"ACCOUNT_JOIN_PUBLIC_URL": ""}, "ACCOUNT_JOIN_PUBLIC_URL is required"},
+		{"join url unset, open", map[string]string{"ACCOUNT_SIGNUP": "open", "ACCOUNT_JOIN_PUBLIC_URL": ""}, "ACCOUNT_JOIN_PUBLIC_URL is required"},
+		{"join url trailing slash", map[string]string{"ACCOUNT_JOIN_PUBLIC_URL": "https://join.example.org/"}, "ACCOUNT_JOIN_PUBLIC_URL must not end in /"},
 		{"account url trailing slash", map[string]string{"ACCOUNT_PUBLIC_URL": "https://account.example.org/"}, "ACCOUNT_PUBLIC_URL must not end in /"},
-		{"same host", map[string]string{"ACCOUNT_INVITE_PUBLIC_URL": "https://ACCOUNT.example.org:443"}, "must be different hosts"},
+		{"same host", map[string]string{"ACCOUNT_JOIN_PUBLIC_URL": "https://ACCOUNT.example.org:443"}, "must be different hosts"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -120,19 +120,26 @@ func TestInvitesURLs(t *testing.T) {
 	}
 }
 
+func TestOperators(t *testing.T) {
+	for in, want := range map[string]string{"": "[]", " alice, Bob ,": "[alice Bob]", "carol": "[carol]"} {
+		c, err := Load(env(map[string]string{"ACCOUNT_OPERATORS": in}))
+		if err != nil || fmt.Sprint(c.Operators) != want {
+			t.Errorf("%q: %v %v", in, c.Operators, err)
+		}
+	}
+	for _, bad := range []string{"bad name!", "alice,,-bob"} {
+		if _, err := Load(env(map[string]string{"ACCOUNT_OPERATORS": bad})); err == nil || !strings.Contains(err.Error(), "ACCOUNT_OPERATORS") || strings.Contains(err.Error(), "bad name") {
+			t.Errorf("%q: %v", bad, err)
+		}
+	}
+}
+
 func TestHosts(t *testing.T) {
 	cfg, err := Load(env(map[string]string{"ACCOUNT_PUBLIC_URL": "https://Account.Example.org:8443"}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.AccountHost() != "account.example.org" || cfg.InviteHost() != "invite.example.org" {
-		t.Fatalf("hosts: %q %q", cfg.AccountHost(), cfg.InviteHost())
-	}
-	off, err := Load(env(map[string]string{"ACCOUNT_INVITES": "false", "ACCOUNT_INVITE_PUBLIC_URL": ""}))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if off.InviteHost() != "" || off.InviteURL != "" || off.Invites {
-		t.Fatalf("invites off: %+v", off)
+	if cfg.AccountHost() != "account.example.org" || cfg.JoinHost() != "join.example.org" {
+		t.Fatalf("hosts: %q %q", cfg.AccountHost(), cfg.JoinHost())
 	}
 }

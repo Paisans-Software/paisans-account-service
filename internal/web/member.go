@@ -7,13 +7,13 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/paisans-software/paisans-account-service/internal/config"
 	"github.com/paisans-software/paisans-account-service/internal/flow"
 	"github.com/paisans-software/paisans-account-service/internal/store"
 )
 
 type homeData struct {
-	// InvitesOn shows the invite cards; with invites off the page shows
-	// only who is signed in.
+	// InvitesOn shows the invite cards, which open signup has none of.
 	InvitesOn        bool
 	Invites          []store.Invite
 	NewLink, Expires string
@@ -25,7 +25,7 @@ type homeData struct {
 const alreadyMade = "That invite was already made. It's in your list below. If you didn't copy the link, revoke it and make a new one."
 
 func (s *server) homeView(r *http.Request, sess Session, extra homeData) (homeData, error) {
-	if !s.Invites {
+	if s.Signup != config.SignupInvite {
 		return homeData{}, nil
 	}
 	extra.InvitesOn = true

@@ -30,6 +30,8 @@ var (
 	ErrEmailTaken      = errors.New("an account already uses that email address")
 	ErrNotAgreed       = errors.New("you need to agree to the code of conduct")
 	ErrForbidden       = errors.New("forbidden")
+	// ErrBanned is an application whose address matches a current ban.
+	ErrBanned = errors.New("that address is banned")
 	// ErrBadNonce is a create form without a well-formed one-time nonce.
 	ErrBadNonce = errors.New("the form is missing its one-time value")
 )
@@ -45,14 +47,20 @@ type Settings struct {
 	InviteLifetime  time.Duration
 	// AccountURL is the base of links to the account host, such as /admin.
 	AccountURL string
-	// InviteURL is the base of invite links.
-	InviteURL    string
+	// JoinURL is the base of invite links.
+	JoinURL      string
 	EmailHashKey []byte
 	// AdminGroup is the provider group whose members are the service's admins.
 	AdminGroup string
 	// LoginLinkDays is the sign-in link's lifetime, the one the provider
 	// client was built with, for the pages that state it.
 	LoginLinkDays int
+	// IDPURL is the identity provider as members reach it, for mail that
+	// sends someone there to sign in.
+	IDPURL string
+	// Operators are the usernames the deployment declares as operators: the
+	// service never bans them or changes their address or name.
+	Operators []string
 }
 
 type Applicant struct {
@@ -135,7 +143,7 @@ func (s *Service) CreateInvite(ctx context.Context, m Member, nonce string) (str
 		return "", store.Invite{}, err
 	}
 	slog.Info("write", "action", "invite.create", "invite_id", inv.ID)
-	return s.s.InviteURL + "/i/" + tok, inv, nil
+	return s.s.JoinURL + "/i/" + tok, inv, nil
 }
 
 func (s *Service) Invites(ctx context.Context, m Member) ([]store.Invite, error) {
@@ -177,31 +185,47 @@ func (a Applicant) check() (Applicant, error) {
 	return a, nil
 }
 
-// available is checked at application and again at approval. A provider
-// outage at application time defers the check rather than refusing.
-func (s *Service) available(ctx context.Context, username, email string, strict bool) error {
-	taken, err := s.p.UsernameTaken(ctx, username)
-	if err != nil && strict {
+// available is checked at approval, just before the account is created.
+func (s *Service) available(ctx context.Context, username, email string) error {
+	if taken, err := s.p.UsernameTaken(ctx, username); err != nil {
 		return err
-	}
-	if taken {
+	} else if taken {
 		return ErrUsernameTaken
 	}
-	taken, err = s.p.EmailTaken(ctx, email)
-	if err != nil && strict {
+	if taken, err := s.p.EmailTaken(ctx, email); err != nil {
 		return err
-	}
-	if taken {
+	} else if taken {
 		return ErrEmailTaken
 	}
 	return nil
 }
 
+// Apply records an application made with an invite. It returns true when
+// the account was created at once, as with approval off.
 func (s *Service) Apply(ctx context.Context, token string, in Applicant) (bool, error) {
 	h, ok := TokenHash(token)
 	if !ok {
 		return false, store.ErrNotUsable
 	}
+	// A refused address is answered as an accepted one, so the invite must be
+	// known usable first: a dead invite is never answered as accepted.
+	if _, err := s.st.OpenInvite(ctx, h, s.now()); err != nil {
+		return false, err
+	}
+	return s.submit(ctx, in, func(n store.NewApplication) (store.Application, error) {
+		return s.st.Apply(ctx, h, s.now(), n)
+	})
+}
+
+// Register records an application made through open registration, with no
+// invite. Everything after the form is Apply's.
+func (s *Service) Register(ctx context.Context, in Applicant) (bool, error) {
+	return s.submit(ctx, in, func(n store.NewApplication) (store.Application, error) {
+		return s.st.Register(ctx, s.now(), n)
+	})
+}
+
+func (s *Service) submit(ctx context.Context, in Applicant, record func(store.NewApplication) (store.Application, error)) (bool, error) {
 	a, err := in.check()
 	if err != nil {
 		return false, err
@@ -211,10 +235,22 @@ func (s *Service) Apply(ctx context.Context, token string, in Applicant) (bool, 
 	} else if taken {
 		return false, ErrUsernameTaken
 	}
-	if err := s.available(ctx, a.Username, a.Email, false); err != nil {
+	// A provider outage defers the username check to approval.
+	if taken, err := s.p.UsernameTaken(ctx, a.Username); err == nil && taken {
+		return false, ErrUsernameTaken
+	}
+	refused, err := s.addressRefused(ctx, a.Email)
+	if err != nil {
 		return false, err
 	}
-	app, err := s.st.Apply(ctx, h, s.now(), store.NewApplication{Username: a.Username, Email: a.Email, DisplayName: a.DisplayName, CoCVersion: s.coc.Version})
+	if refused != "" {
+		// The page says what it says for an accepted application, so it never
+		// tells anyone whether an address has an account or a ban. Only the
+		// address's own inbox learns why.
+		s.tellRefused(ctx, a.Email, refused)
+		return !s.s.RequireApproval, nil
+	}
+	app, err := record(store.NewApplication{Username: a.Username, Email: a.Email, DisplayName: a.DisplayName, CoCVersion: s.coc.Version})
 	if errors.Is(err, store.ErrUsernameTaken) {
 		return false, ErrUsernameTaken
 	}
@@ -227,26 +263,68 @@ func (s *Service) Apply(ctx context.Context, token string, in Applicant) (bool, 
 		if err == nil {
 			return true, nil
 		}
-		// The invite is spent, so the applicant is told to wait and the admins
-		// can retry from the pending list.
+		// The application is recorded, so the applicant is told to wait and
+		// the admins can retry from the pending list.
 		slog.Warn("automatic approval failed; left for an admin", "application_id", app.ID, "error", err)
 	}
 	if err := s.m.Send(ctx, []string{app.Email}, "We received your application",
 		"Thank you for agreeing to the code of conduct. An admin will review your application, and you will get another email when they have.\n"); err != nil {
 		slog.Warn("could not acknowledge an application", "error", err)
 	}
-	s.notifyAdmins(ctx)
+	s.notifyAdmins(ctx, "An application is waiting", "Someone has applied to join and is waiting for approval.\n\n"+s.s.AccountURL+"/admin\n")
 	return false, nil
 }
 
-func (s *Service) notifyAdmins(ctx context.Context) {
+// The reasons addressRefused gives.
+const (
+	refusedBanned = "banned"
+	refusedInUse  = "in_use"
+)
+
+// addressRefused says why a signup with email cannot go ahead, or "" if it
+// can. A ban is always checked; an account already using the address is
+// checked when the provider answers, and otherwise again at approval.
+func (s *Service) addressRefused(ctx context.Context, email string) (string, error) {
+	banned, err := s.banned(ctx, email)
+	if err != nil {
+		return "", err
+	}
+	if banned {
+		return refusedBanned, nil
+	}
+	if taken, err := s.p.EmailTaken(ctx, email); err == nil && taken {
+		return refusedInUse, nil
+	}
+	return "", nil
+}
+
+func (s *Service) banned(ctx context.Context, email string) (bool, error) {
+	return s.st.EmailBanned(ctx, emailhash.Sum(s.s.EmailHashKey, email))
+}
+
+// tellRefused mails a refused signup's address the reason, which no page
+// shows.
+func (s *Service) tellRefused(ctx context.Context, email, reason string) {
+	subject, body := "About your application", "Your application to join can't be accepted.\n"
+	if reason == refusedInUse {
+		subject = "You already have an account"
+		body = "Someone asked to join with this email address, which already has an account. If it was you, go to " +
+			s.s.IDPURL + ", choose sign in with an email code, and enter the code from the email you get.\n\nIf it wasn't you, you can ignore this email.\n"
+	}
+	slog.Info("signup refused", "reason", reason)
+	if err := s.m.Send(ctx, []string{email}, subject, body); err != nil {
+		slog.Warn("could not tell a refused signup", "error", err)
+	}
+}
+
+// notifyAdmins mails every member of the admin group.
+func (s *Service) notifyAdmins(ctx context.Context, subject, body string) {
 	admins, err := s.p.AdminGroupEmails(ctx, s.s.AdminGroup)
 	if err == nil && len(admins) > 0 {
-		err = s.m.Send(ctx, admins, "An invite application is waiting",
-			"Someone has accepted an invite and is waiting for approval.\n\n"+s.s.AccountURL+"/admin\n")
+		err = s.m.Send(ctx, admins, subject, body)
 	}
 	if err != nil {
-		slog.Warn("could not notify admins of a waiting application", "error", err)
+		slog.Warn("could not notify the admins", "subject", subject, "error", err)
 	}
 }
 
@@ -342,7 +420,13 @@ func (s *Service) createAccount(ctx context.Context, adminSub string, app store.
 	}
 	userID := u.ID
 	if !found || !strings.EqualFold(strings.TrimSpace(u.Email), app.Email) {
-		if err := s.available(ctx, app.Username, app.Email, true); err != nil {
+		// The address may have been banned since the application was made.
+		if banned, err := s.banned(ctx, app.Email); err != nil {
+			return "", err
+		} else if banned {
+			return "", ErrBanned
+		}
+		if err := s.available(ctx, app.Username, app.Email); err != nil {
 			return "", err
 		}
 		u, err := s.p.CreateUser(ctx, idp.NewUser{Username: app.Username, Email: app.Email, DisplayName: app.DisplayName})
@@ -400,9 +484,16 @@ func (s *Service) Decline(ctx context.Context, admin Member, id int64) error {
 		return err
 	}
 	slog.Info("write", "action", "application.decline", "application_id", id)
-	if err := s.m.Send(ctx, []string{app.Email}, "About your invitation",
+	subject := "About your invitation"
+	if app.InviterUsername == "" {
+		subject = "About your application"
+	}
+	if err := s.m.Send(ctx, []string{app.Email}, subject,
 		"Thank you for your interest. Your application to join was not accepted.\n"); err != nil {
-		slog.Warn("could not tell the invitee of a decline", "error", err)
+		slog.Warn("could not tell the applicant of a decline", "error", err)
+	}
+	if app.InviterUsername == "" {
+		return nil
 	}
 	inviter, found, err := s.p.FindUser(ctx, app.InviterUsername)
 	if err != nil {

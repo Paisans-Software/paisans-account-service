@@ -1,9 +1,9 @@
 {{define "content"}}
 <div class="card"><h1>Applications</h1>
-{{if .Data}}<table><tr><th>Who</th><th>Invited by</th><th>Applied</th><th>Declined before</th><th></th></tr>
+{{if .Data}}<table><tr><th>Who</th><th>Joined by</th><th>Applied</th><th>Declined before</th><th></th></tr>
 {{range .Data}}<tr>
 <td>{{.DisplayName}}<br><span class="muted">{{.Username}} · {{.Email}}</span></td>
-<td>{{.InviterUsername}}</td>
+<td>{{if .InviterUsername}}invited by {{.InviterUsername}}{{else}}registered{{end}}</td>
 <td>{{.AgreedAt.Format "2 Jan 2006"}}</td>
 <td>{{if .Declines.Count}}{{.Declines.Count}} time(s), last {{.Declines.Last.Format "2 Jan 2006"}}{{else}}never{{end}}</td>
 <td>{{if eq .State "link_unsent"}}<p class="muted">Account created; sign-in link not sent.</p>
@@ -18,5 +18,5 @@
 <form class="inline" method="post" action="/admin/applications/{{.ID}}/decline"><input type="hidden" name="csrf" value="{{$.CSRF}}"><button class="destructive">Decline</button></form>{{end}}</td>
 </tr>{{end}}</table>{{else}}<p class="muted">Nothing is waiting.</p>{{end}}
 </div>
-<p><a href="/">Back to your account</a></p>
+{{template "adminnav"}}
 {{end}}

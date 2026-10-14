@@ -7,6 +7,9 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+
+	"github.com/paisans-software/paisans-account-service/internal/config"
+	"github.com/paisans-software/paisans-account-service/internal/flow"
 )
 
 // asOn is as on host: a request with sess's cookie and, for a form, its CSRF.
@@ -36,20 +39,20 @@ func TestRoutesByHost(t *testing.T) {
 		host, method, path string
 		want               int
 	}{
-		{"invite.example.org", "GET", "/i/nope", http.StatusNotFound}, // unknown token: the page's own 404, routed
+		{"join.example.org", "GET", "/i/nope", http.StatusNotFound}, // unknown token: the page's own 404, routed
 		{"account.example.org", "GET", "/i/nope", http.StatusNotFound},
-		{"invite.example.org", "GET", "/admin", http.StatusNotFound},
-		{"invite.example.org", "GET", "/", http.StatusNotFound},
-		{"invite.example.org", "GET", "/auth/login", http.StatusNotFound},
-		{"invite.example.org", "GET", "/auth/callback", http.StatusNotFound},
+		{"join.example.org", "GET", "/admin", http.StatusNotFound},
+		{"join.example.org", "GET", "/", http.StatusNotFound}, // open signup's page; this harness is invite
+		{"join.example.org", "GET", "/auth/login", http.StatusNotFound},
+		{"join.example.org", "GET", "/auth/callback", http.StatusNotFound},
 		{"account.example.org", "GET", "/", http.StatusFound}, // to /auth/login
 		{"ACCOUNT.example.org:443", "GET", "/", http.StatusFound},
 		{"Account.Example.Org", "GET", "/", http.StatusFound},
 		{"account.example.org:8443", "GET", "/", http.StatusFound},
-		{"INVITE.example.org:443", "GET", "/admin", http.StatusNotFound},
+		{"JOIN.example.org:443", "GET", "/admin", http.StatusNotFound},
 		{"10.0.0.5:8082", "GET", "/healthz", http.StatusOK},
 		{"account.example.org", "GET", "/healthz", http.StatusOK},
-		{"invite.example.org", "GET", "/static/style.css", http.StatusOK},
+		{"join.example.org", "GET", "/static/style.css", http.StatusOK},
 		{"account.example.org", "GET", "/static/style.css", http.StatusOK},
 		{"elsewhere.example.org", "GET", "/", http.StatusNotFound},
 		{"elsewhere.example.org", "GET", "/static/style.css", http.StatusNotFound},
@@ -63,6 +66,41 @@ func TestRoutesByHost(t *testing.T) {
 	}
 }
 
+// accountRoutes are every account-host route in both signup modes, as a
+// signed-in admin sends them; app is a pending application's ID.
+func accountRoutes(app string) []route {
+	csrf := url.Values{"csrf": {"tok"}}
+	return []route{
+		{"GET", "/", nil},
+		{"GET", "/auth/login", nil},
+		{"GET", "/auth/callback", nil},
+		{"POST", "/auth/logout", csrf},
+		{"GET", "/account/email", nil},
+		{"POST", "/account/email", url.Values{"csrf": {"tok"}, "email": {"new@x.org"}}},
+		{"POST", "/account/email/confirm", url.Values{"csrf": {"tok"}, "code": {"000000"}}},
+		{"GET", "/account/name", nil},
+		{"POST", "/account/name", url.Values{"csrf": {"tok"}, "display_name": {"R"}}},
+		{"GET", "/admin", nil},
+		{"POST", "/admin/applications/" + app + "/dismiss", csrf},
+		{"POST", "/admin/applications/" + app + "/decline", csrf},
+		{"POST", "/admin/applications/" + app + "/approve", csrf},
+		{"GET", "/admin/members?q=ali", nil},
+		{"GET", "/admin/members/s-alice/ban", nil},
+		{"POST", "/admin/members/s-alice/ban", url.Values{"csrf": {"tok"}, "reason": {"spam"}}},
+		{"GET", "/admin/bans", nil},
+		{"POST", "/admin/bans/1/lift", csrf},
+		{"GET", "/admin/recovery", nil},
+		{"POST", "/admin/recovery", url.Values{"csrf": {"tok"}, "username": {"alice"}, "email": {"a2@x.org"}, "reason": {"call"}}},
+		{"POST", "/admin/recovery/1/approve", csrf},
+		{"POST", "/admin/recovery/1/cancel", csrf},
+	}
+}
+
+type route struct {
+	method, path string
+	form         url.Values
+}
+
 // Every route answers on its own host, with a signed-in admin, and is a 404 on
 // the other host even with the same cookie. /static/ is on both, and
 // TestRoutesByHost covers it.
@@ -70,27 +108,13 @@ func TestEveryRouteOnlyOnItsHost(t *testing.T) {
 	h := newHarness(t, true)
 	applyBob(t, h)
 	p, _ := h.flow.Pending(context.Background())
-	app := itoa(p[0].ID)
-	csrf := url.Values{"csrf": {"tok"}}
-	type route struct {
-		method, path string
-		form         url.Values
-	}
-	account := []route{
-		{"GET", "/", nil},
-		{"GET", "/auth/login", nil},
-		{"GET", "/auth/callback", nil},
-		{"POST", "/auth/logout", csrf},
-		{"POST", "/invites", createForm()},
-		{"POST", "/invites/1/revoke", csrf},
-		{"GET", "/admin", nil},
-		{"POST", "/admin/applications/" + app + "/dismiss", csrf},
-		{"POST", "/admin/applications/" + app + "/decline", csrf},
-		{"POST", "/admin/applications/" + app + "/approve", csrf},
-	}
+	account := append(accountRoutes(itoa(p[0].ID)),
+		route{"POST", "/invites", createForm()},
+		route{"POST", "/invites/1/revoke", url.Values{"csrf": {"tok"}}},
+	)
 	for _, r := range account {
-		if rec := h.asOn(inviteHost, admin, r.method, r.path, r.form); rec.Code != http.StatusNotFound {
-			t.Errorf("%s invite.%s: %d, want 404", r.method, r.path, rec.Code)
+		if rec := h.asOn(joinHost, admin, r.method, r.path, r.form); rec.Code != http.StatusNotFound {
+			t.Errorf("%s join.%s: %d, want 404", r.method, r.path, rec.Code)
 		}
 		if rec := h.asOn(accountHost, admin, r.method, r.path, r.form); rec.Code == http.StatusNotFound || rec.Code == http.StatusMethodNotAllowed {
 			t.Errorf("%s account.%s: %d, want the route's own status", r.method, r.path, rec.Code)
@@ -108,16 +132,22 @@ func TestEveryRouteOnlyOnItsHost(t *testing.T) {
 		}
 	}
 	for _, r := range invitee {
-		if rec := h.asOn(inviteHost, Session{}, r.method, r.path, r.form); rec.Code != http.StatusOK {
-			t.Errorf("%s invite.%s: %d, want 200", r.method, r.path, rec.Code)
+		if rec := h.asOn(joinHost, Session{}, r.method, r.path, r.form); rec.Code != http.StatusOK {
+			t.Errorf("%s join.%s: %d, want 200", r.method, r.path, rec.Code)
+		}
+	}
+	// The registration page is open signup's alone.
+	for _, m := range []string{"GET", "POST"} {
+		if rec := h.asOn(joinHost, Session{}, m, "/", url.Values{}); rec.Code != http.StatusNotFound {
+			t.Errorf("%s join./ under invite signup: %d", m, rec.Code)
 		}
 	}
 }
 
-func TestInviteRouteReachesHandlerOnlyOnInviteHost(t *testing.T) {
+func TestInviteRouteReachesHandlerOnlyOnJoinHost(t *testing.T) {
 	h := newHarness(t, true)
 	tok, _ := h.invite(t)
-	for host, want := range map[string]int{inviteHost: http.StatusOK, accountHost: http.StatusNotFound} {
+	for host, want := range map[string]int{joinHost: http.StatusOK, accountHost: http.StatusNotFound} {
 		if rec := h.get(host, "/i/"+tok); rec.Code != want {
 			t.Errorf("%s: %d, want %d", host, rec.Code, want)
 		}
@@ -128,58 +158,71 @@ func TestInviteRouteReachesHandlerOnlyOnInviteHost(t *testing.T) {
 	}
 }
 
-// With invites off, a deployment that had issued invites still answers: old
-// links are 404 on every host, and home and /admin render.
-func TestInvitesOff(t *testing.T) {
+// Under open signup, join. serves the registration page and nothing else,
+// the invite routes do not exist anywhere, and the account host is whole.
+func TestOpenSignupRoutes(t *testing.T) {
 	on := newHarness(t, true)
 	tok, inviteeCSRF := on.invite(t)
-	h := newHarnessInvites(t, false)
-	for _, host := range []string{accountHost, inviteHost} {
+	h := newHarnessSignup(t, config.SignupOpen)
+	for _, host := range []string{accountHost, joinHost} {
 		if rec := h.get(host, "/i/"+tok); rec.Code != http.StatusNotFound {
 			t.Errorf("GET %s/i/<token>: %d", host, rec.Code)
 		}
 		if rec := h.asOn(host, Session{}, "POST", "/i/"+tok, form(inviteeCSRF)); rec.Code != http.StatusNotFound {
 			t.Errorf("POST %s/i/<token>: %d", host, rec.Code)
 		}
-		if rec := h.get(host, "/i/x"); rec.Code != http.StatusNotFound {
-			t.Errorf("%s/i/x: %d", host, rec.Code)
-		}
 	}
-	for _, path := range []string{"/invites", "/invites/1/revoke", "/admin/applications/1/approve", "/admin/applications/1/decline", "/admin/applications/1/dismiss"} {
+	for _, path := range []string{"/invites", "/invites/1/revoke"} {
 		f := url.Values{"csrf": {"tok"}}
 		if path == "/invites" {
 			f = createForm()
 		}
 		if rec := h.as(admin, "POST", path, f); rec.Code != http.StatusNotFound {
-			t.Errorf("POST %s with invites off: %d", path, rec.Code)
+			t.Errorf("POST %s under open signup: %d", path, rec.Code)
 		}
 	}
 	if inv, _ := h.flow.Invites(context.Background(), admin.member()); len(inv) != 0 {
-		t.Fatal("an invite was made with invites off")
+		t.Fatal("an invite was made under open signup")
+	}
+	if rec := h.get(joinHost, "/"); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "<h1>Join</h1>") {
+		t.Errorf("join./: %d", rec.Code)
+	}
+	for _, path := range []string{"/admin", "/auth/login", "/account/email", "/static/nope", "/x"} {
+		if rec := h.asOn(joinHost, admin, "GET", path, nil); rec.Code != http.StatusNotFound {
+			t.Errorf("join.%s: %d", path, rec.Code)
+		}
+	}
+	if rec := h.get(joinHost, "/static/style.css"); rec.Code != http.StatusOK {
+		t.Errorf("static on join.: %d", rec.Code)
+	}
+	if _, err := h.flow.Register(context.Background(), flow.Applicant{Username: "bob", Email: "bob@x.org", DisplayName: "Bob", Agreed: true}); err != nil {
+		t.Fatal(err)
+	}
+	p, _ := h.flow.Pending(context.Background())
+	for _, r := range accountRoutes(itoa(p[0].ID)) {
+		// GET / on join. is the registration page under open signup.
+		if r.path == "/" && r.method == "GET" {
+			continue
+		}
+		if rec := h.asOn(joinHost, admin, r.method, r.path, r.form); rec.Code != http.StatusNotFound {
+			t.Errorf("%s join.%s: %d, want 404", r.method, r.path, rec.Code)
+		}
+		if rec := h.asOn(accountHost, admin, r.method, r.path, r.form); rec.Code == http.StatusNotFound || rec.Code == http.StatusMethodNotAllowed {
+			t.Errorf("%s account.%s: %d, want the route's own status", r.method, r.path, rec.Code)
+		}
 	}
 	rec := h.as(member, "GET", "/", nil)
 	if body := rec.Body.String(); rec.Code != http.StatusOK || strings.Contains(body, "Invite someone") ||
 		strings.Contains(body, "/invites") || !strings.Contains(body, "<p>Signed in as alice.</p>") {
-		t.Errorf("home with invites off: %d %q", rec.Code, body)
-	}
-	rec = h.as(admin, "GET", "/", nil)
-	if body := rec.Body.String(); rec.Code != http.StatusOK || strings.Contains(body, "Applications waiting") {
-		t.Errorf("admin home with invites off: %d %q", rec.Code, body)
-	}
-	rec = h.as(admin, "GET", "/admin", nil)
-	if body := rec.Body.String(); rec.Code != http.StatusOK || !strings.Contains(body, "Nothing is waiting.") {
-		t.Errorf("admin with invites off: %d %q", rec.Code, body)
+		t.Errorf("home under open signup: %d %q", rec.Code, body)
 	}
 	if rec := h.get("10.0.0.5:8082", "/healthz"); rec.Code != http.StatusOK {
-		t.Errorf("healthz with invites off: %d", rec.Code)
-	}
-	if rec := h.get(accountHost, "/static/style.css"); rec.Code != http.StatusOK {
-		t.Errorf("static on the account host with invites off: %d", rec.Code)
+		t.Errorf("healthz: %d", rec.Code)
 	}
 }
 
 // The session and login cookies carry no Domain, so a browser sends them to
-// the account host alone and the invitee origin never holds a session.
+// the account host alone and the join origin never holds a session.
 func TestCookiesHaveNoDomain(t *testing.T) {
 	s := sessions{key: make([]byte, 32), secure: true}
 	rec := httptest.NewRecorder()
@@ -201,7 +244,7 @@ func TestCookiesHaveNoDomain(t *testing.T) {
 	}
 }
 
-// The provider sends the member back to the account host, never the invite
+// The provider sends the member back to the account host, never the join
 // host.
 func TestOIDCRedirectIsOnTheAccountHost(t *testing.T) {
 	a := newTestAuthenticator(t, newFakeOP(t))

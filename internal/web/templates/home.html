@@ -13,10 +13,14 @@
   <td>{{if eq .State "open"}}<form class="inline" method="post" action="/invites/{{.ID}}/revoke"><input type="hidden" name="csrf" value="{{$.CSRF}}"><button class="secondary">Revoke</button></form>{{end}}</td></tr>{{end}}
   </table>{{else}}<p class="muted">You have not made any invites yet.</p>{{end}}
 </div>
-{{if .Session.Admin}}<p><a href="/admin">Applications waiting for approval</a></p>{{end}}
 {{else}}
 <div class="card">
   <p>Signed in as {{.Session.Username}}.</p>
 </div>
 {{end}}
+<div class="card">
+  <h2>Your account</h2>
+  <p><a href="/account/email">Change your email address</a> · <a href="/account/name">Change your name</a></p>
+</div>
+{{if .Session.Admin}}{{template "adminnav"}}{{end}}
 {{end}}

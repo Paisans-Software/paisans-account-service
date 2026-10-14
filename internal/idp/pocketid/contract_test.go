@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -98,6 +99,88 @@ func TestContract(t *testing.T) {
 	get(t, mailpit+"/api/v1/message/"+url.PathEscape(msgID), &msg)
 	if !strings.Contains(msg.Text, "It expires in 7 days.") {
 		t.Fatalf("login email does not carry the 168h lifetime:\n%s", msg.Text)
+	}
+}
+
+// The update write sends every field back as read: disabling and re-enabling
+// a user, and setting its address or name, change nothing else, and Pocket ID
+// accepts the body.
+func TestContractUpdate(t *testing.T) {
+	base, key := os.Getenv("CONTRACT_IDP_URL"), os.Getenv("CONTRACT_API_KEY")
+	c, err := New(base, key, &http.Client{Timeout: 10 * time.Second}, 7*24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	name := fmt.Sprintf("update%d", time.Now().UnixNano()%1e9)
+	u, err := c.CreateUser(ctx, idp.NewUser{Username: name, Email: name + "@example.org", DisplayName: "Before"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	read := func() map[string]any {
+		t.Helper()
+		var m map[string]any
+		api(t, base, key, http.MethodGet, "/api/users/"+u.ID, nil, &m)
+		return m
+	}
+	before := read()
+	same := func(after map[string]any, changed ...string) {
+		t.Helper()
+		skip := map[string]bool{"userGroups": true, "customClaims": true}
+		for _, k := range changed {
+			skip[k] = true
+		}
+		for k, v := range before {
+			if !skip[k] && fmt.Sprint(after[k]) != fmt.Sprint(v) {
+				t.Errorf("%s changed: %v -> %v", k, v, after[k])
+			}
+		}
+		if fmt.Sprint(after["userGroups"]) != fmt.Sprint(before["userGroups"]) {
+			t.Errorf("groups changed: %v -> %v", before["userGroups"], after["userGroups"])
+		}
+	}
+
+	if err := c.SetDisabled(ctx, u.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	after := read()
+	if after["disabled"] != true {
+		t.Fatalf("not disabled: %v", after)
+	}
+	same(after, "disabled")
+	if got, err := c.GetUser(ctx, u.ID); err != nil || !got.Disabled {
+		t.Fatalf("GetUser after disable: %+v %v", got, err)
+	}
+	if err := c.SetDisabled(ctx, u.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	after = read()
+	if after["disabled"] != false {
+		t.Fatalf("not re-enabled: %v", after)
+	}
+	same(after)
+
+	if err := c.SetEmail(ctx, u.ID, name+".new@example.org"); err != nil {
+		t.Fatal(err)
+	}
+	after = read()
+	if after["email"] != name+".new@example.org" || after["emailVerified"] != true {
+		t.Fatalf("email not set and verified: %v", after)
+	}
+	same(after, "email", "emailVerified")
+	before = after
+
+	if err := c.SetName(ctx, u.ID, idp.Name{DisplayName: "After", FirstName: "Af", LastName: "Ter"}); err != nil {
+		t.Fatal(err)
+	}
+	after = read()
+	if after["displayName"] != "After" || after["firstName"] != "Af" || after["lastName"] != "Ter" || after["username"] != name {
+		t.Fatalf("name not set: %v", after)
+	}
+	same(after, "displayName", "firstName", "lastName")
+
+	if _, err := c.GetUser(ctx, "00000000-0000-0000-0000-00000000dead"); !errors.Is(err, idp.ErrNotFound) {
+		t.Fatalf("missing user: %v", err)
 	}
 }
 

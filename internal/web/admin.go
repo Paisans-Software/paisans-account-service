@@ -38,11 +38,16 @@ func decisionCode(err error) string {
 	return "failed"
 }
 
+// queue is the admin page. With invites off there is no application queue,
+// so it renders with nothing to act on.
 func (s *server) queue(w http.ResponseWriter, r *http.Request, sess Session) {
-	p, err := s.Flow.Pending(r.Context())
-	if err != nil {
-		s.fail(w, err)
-		return
+	var p []flow.Pending
+	if s.Invites {
+		var err error
+		if p, err = s.Flow.Pending(r.Context()); err != nil {
+			s.fail(w, err)
+			return
+		}
 	}
 	v := view{Title: "Applications", Session: &sess, CSRF: sess.CSRF, Data: p, Error: decisionErrors[r.URL.Query().Get("error")]}
 	s.Render.page(w, 200, "admin.html", v)

@@ -25,7 +25,7 @@ func (h harness) inviteAs(t *testing.T, m flow.Member) (string, string) {
 }
 
 func post(h harness, path string, form url.Values) *httptest.ResponseRecorder {
-	req := httptest.NewRequest("POST", path, strings.NewReader(form.Encode()))
+	req := httptest.NewRequest("POST", "http://"+inviteHost+path, strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.RemoteAddr = "203.0.113.1:1"
 	rec := httptest.NewRecorder()
@@ -40,8 +40,7 @@ func form(csrf string) url.Values {
 func TestInvitePageShowsCoC(t *testing.T) {
 	h := newHarness(t, true)
 	tok, _ := h.invite(t)
-	rec := httptest.NewRecorder()
-	h.h.ServeHTTP(rec, httptest.NewRequest("GET", "/i/"+tok, nil))
+	rec := h.get(inviteHost, "/i/"+tok)
 	if rec.Code != 200 || !strings.Contains(rec.Body.String(), "Be kind") || !strings.Contains(rec.Body.String(), "alice") {
 		t.Fatalf("%d", rec.Code)
 	}
@@ -49,8 +48,7 @@ func TestInvitePageShowsCoC(t *testing.T) {
 
 func TestBadTokenIsNeutral(t *testing.T) {
 	h := newHarness(t, true)
-	rec := httptest.NewRecorder()
-	h.h.ServeHTTP(rec, httptest.NewRequest("GET", "/i/nope", nil))
+	rec := h.get(inviteHost, "/i/nope")
 	if rec.Code != 404 || !strings.Contains(rec.Body.String(), "can&#39;t be used") {
 		t.Fatalf("%d", rec.Code)
 	}
@@ -116,8 +114,7 @@ func TestDatabaseOutageIs503NotNeutral(t *testing.T) {
 	h := newHarness(t, true)
 	tok, _ := h.invite(t)
 	h.st.Close()
-	rec := httptest.NewRecorder()
-	h.h.ServeHTTP(rec, httptest.NewRequest("GET", "/i/"+tok, nil))
+	rec := h.get(inviteHost, "/i/"+tok)
 	if rec.Code != 503 || strings.Contains(rec.Body.String(), "can&#39;t be used") || !strings.Contains(rec.Body.String(), "try again in a minute") {
 		t.Fatalf("%d %s", rec.Code, rec.Body.String())
 	}
@@ -162,12 +159,7 @@ func TestRevokedLooksLikeMalformed(t *testing.T) {
 	if err := h.flow.Revoke(context.Background(), alice, inv.ID); err != nil {
 		t.Fatal(err)
 	}
-	get := func(p string) *httptest.ResponseRecorder {
-		rec := httptest.NewRecorder()
-		h.h.ServeHTTP(rec, httptest.NewRequest("GET", p, nil))
-		return rec
-	}
-	a, b := get("/i/"+link[strings.LastIndex(link, "/")+1:]), get("/i/nope")
+	a, b := h.get(inviteHost, "/i/"+link[strings.LastIndex(link, "/")+1:]), h.get(inviteHost, "/i/nope")
 	if a.Code != 404 || a.Code != b.Code || a.Body.String() != b.Body.String() {
 		t.Fatalf("revoked differs from malformed: %d vs %d", a.Code, b.Code)
 	}

@@ -83,7 +83,7 @@ func TestEveryPageExecutes(t *testing.T) {
 	sess := &Session{Sub: "u1", Username: "alice", Admin: true, CSRF: "tok"}
 	pages := map[string]any{
 		"home.html": map[string]any{
-			"Remaining": "2 invites left", "NewLink": "https://x.example/join/abc", "Expires": "1 Nov",
+			"InvitesOn": true, "Remaining": "2 invites left", "NewLink": "https://x.example/join/abc", "Expires": "1 Nov",
 			"Invites": []invite{{"i1", "open", now}, {"i2", "used", now}},
 		},
 		"admin.html": []application{

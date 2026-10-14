@@ -12,6 +12,9 @@ import (
 )
 
 type homeData struct {
+	// InvitesOn shows the invite cards; with invites off the page shows
+	// only who is signed in.
+	InvitesOn        bool
 	Invites          []store.Invite
 	NewLink, Expires string
 	Remaining        string
@@ -22,6 +25,10 @@ type homeData struct {
 const alreadyMade = "That invite was already made. It's in your list below. If you didn't copy the link, revoke it and make a new one."
 
 func (s *server) homeView(r *http.Request, sess Session, extra homeData) (homeData, error) {
+	if !s.Invites {
+		return homeData{}, nil
+	}
+	extra.InvitesOn = true
 	invites, err := s.Flow.Invites(r.Context(), sess.member())
 	if err != nil {
 		return homeData{}, err
@@ -48,12 +55,12 @@ func (s *server) home(w http.ResponseWriter, r *http.Request, sess Session) {
 		s.fail(w, err)
 		return
 	}
-	s.Render.page(w, 200, "home.html", view{Title: "Invites", Session: &sess, CSRF: sess.CSRF, Data: d})
+	s.Render.page(w, 200, "home.html", view{Title: "Account", Session: &sess, CSRF: sess.CSRF, Data: d})
 }
 
 func (s *server) createInvite(w http.ResponseWriter, r *http.Request, sess Session) {
 	link, inv, err := s.Flow.CreateInvite(r.Context(), sess.member(), r.PostFormValue("nonce"))
-	v := view{Title: "Invites", Session: &sess, CSRF: sess.CSRF}
+	v := view{Title: "Account", Session: &sess, CSRF: sess.CSRF}
 	var extra homeData
 	switch {
 	case errors.Is(err, flow.ErrBadNonce):

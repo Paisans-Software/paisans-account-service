@@ -13,8 +13,7 @@ import (
 )
 
 type homeData struct {
-	// InvitesOn shows the invite cards; with invites off the page shows
-	// only who is signed in.
+	// InvitesOn shows the invite cards, which open signup has none of.
 	InvitesOn        bool
 	Invites          []store.Invite
 	NewLink, Expires string

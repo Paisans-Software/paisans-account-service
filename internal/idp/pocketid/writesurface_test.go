@@ -342,7 +342,7 @@ func isPkgDo(info *types.Info, fun ast.Expr, pkg *types.Package) bool {
 }
 
 // checkDoCall requires the method argument of a c.do call to be a net/http
-// Method constant written in place, GET everywhere except the two writes.
+// Method constant written in place, GET everywhere except the three writes.
 func checkDoCall(t *testing.T, fset *token.FileSet, info *types.Info, call *ast.CallExpr, owner string, posts, puts map[string]int) {
 	pos := fset.Position(call.Pos())
 	if len(call.Args) < 2 {

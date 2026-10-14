@@ -222,7 +222,7 @@ func TestOpenSignupRoutes(t *testing.T) {
 }
 
 // The session and login cookies carry no Domain, so a browser sends them to
-// the account host alone and the invitee origin never holds a session.
+// the account host alone and the join origin never holds a session.
 func TestCookiesHaveNoDomain(t *testing.T) {
 	s := sessions{key: make([]byte, 32), secure: true}
 	rec := httptest.NewRecorder()

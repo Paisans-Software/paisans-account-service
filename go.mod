@@ -1,4 +1,4 @@
-module github.com/paisans-software/paisans-invite
+module github.com/paisans-software/paisans-account-service
 
 go 1.25.8
 

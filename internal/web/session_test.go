@@ -24,8 +24,8 @@ func TestSessionRoundTrip(t *testing.T) {
 func TestSessionTamperAndExpiry(t *testing.T) {
 	s := sessions{key: make([]byte, 32)}
 	for name, c := range map[string]*http.Cookie{
-		"tampered": {Name: "invite_session", Value: "eyJTdWIiOiJ4In0.AAAA"},
-		"garbage":  {Name: "invite_session", Value: "nope"},
+		"tampered": {Name: "account_session", Value: "eyJTdWIiOiJ4In0.AAAA"},
+		"garbage":  {Name: "account_session", Value: "nope"},
 	} {
 		req := httptest.NewRequest("GET", "/", nil)
 		req.AddCookie(c)
@@ -49,7 +49,7 @@ func TestSessionRejectsLoginStateAndEmptyFields(t *testing.T) {
 	s := sessions{key: key}
 	v, _ := sign(key, "login", loginState{State: "a", Exp: time.Now().Add(time.Hour).Unix()})
 	req := httptest.NewRequest("GET", "/", nil)
-	req.AddCookie(&http.Cookie{Name: "invite_session", Value: v})
+	req.AddCookie(&http.Cookie{Name: "account_session", Value: v})
 	if _, ok := s.read(req); ok {
 		t.Fatal("login-state cookie accepted as session")
 	}

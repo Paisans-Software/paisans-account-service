@@ -13,7 +13,7 @@ import (
 	"github.com/coreos/go-oidc/v3/oidc"
 	"golang.org/x/oauth2"
 
-	"github.com/paisans-software/paisans-invite/internal/config"
+	"github.com/paisans-software/paisans-account-service/internal/config"
 )
 
 type authenticator struct {
@@ -63,7 +63,7 @@ func newAuthenticator(ctx context.Context, cfg config.Config, s sessions) (*auth
 		verifier: p.Verifier(&oidc.Config{ClientID: cfg.OIDCClientID}),
 		oauth: oauth2.Config{
 			ClientID: cfg.OIDCClientID, ClientSecret: cfg.OIDCClientSecret, Endpoint: p.Endpoint(),
-			RedirectURL: cfg.PublicURL + "/auth/callback",
+			RedirectURL: cfg.AccountURL + "/auth/callback",
 			Scopes:      []string{oidc.ScopeOpenID, "profile", "email", "groups"},
 		},
 		memberGrp: cfg.MemberGroup, adminGrp: cfg.AdminGroup, s: s,
@@ -79,18 +79,18 @@ func (a *authenticator) login(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Sign-in failed.", http.StatusInternalServerError)
 		return
 	}
-	http.SetCookie(w, a.s.cookie("invite_login", v, 600))
+	http.SetCookie(w, a.s.cookie("account_login", v, 600))
 	http.Redirect(w, r, a.oauth.AuthCodeURL(st.State, oidc.Nonce(st.Nonce), oauth2.S256ChallengeOption(st.Verifier)), http.StatusFound)
 }
 
 func (a *authenticator) callback(w http.ResponseWriter, r *http.Request) {
-	c, err := r.Cookie("invite_login")
+	c, err := r.Cookie("account_login")
 	var st loginState
 	if err != nil || !verify(a.s.key, "login", c.Value, &st) || time.Now().Unix() > st.Exp || r.URL.Query().Get("state") != st.State {
 		http.Error(w, "Sign-in expired. Please try again.", http.StatusBadRequest)
 		return
 	}
-	http.SetCookie(w, a.s.cookie("invite_login", "", -1))
+	http.SetCookie(w, a.s.cookie("account_login", "", -1))
 	tok, err := a.oauth.Exchange(r.Context(), r.URL.Query().Get("code"), oauth2.VerifierOption(st.Verifier))
 	if err != nil {
 		http.Error(w, "Sign-in failed.", http.StatusBadGateway)

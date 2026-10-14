@@ -15,11 +15,11 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/paisans-software/paisans-invite/internal/coc"
-	"github.com/paisans-software/paisans-invite/internal/emailhash"
-	"github.com/paisans-software/paisans-invite/internal/idp"
-	imail "github.com/paisans-software/paisans-invite/internal/mail"
-	"github.com/paisans-software/paisans-invite/internal/store"
+	"github.com/paisans-software/paisans-account-service/internal/coc"
+	"github.com/paisans-software/paisans-account-service/internal/emailhash"
+	"github.com/paisans-software/paisans-account-service/internal/idp"
+	imail "github.com/paisans-software/paisans-account-service/internal/mail"
+	"github.com/paisans-software/paisans-account-service/internal/store"
 )
 
 var (
@@ -43,8 +43,11 @@ type Settings struct {
 	Quota           int
 	RequireApproval bool
 	InviteLifetime  time.Duration
-	PublicURL       string
-	EmailHashKey    []byte
+	// AccountURL is the base of links to the account host, such as /admin.
+	AccountURL string
+	// InviteURL is the base of invite links.
+	InviteURL    string
+	EmailHashKey []byte
 	// AdminGroup is the provider group whose members are the service's admins.
 	AdminGroup string
 	// LoginLinkDays is the sign-in link's lifetime, the one the provider
@@ -132,7 +135,7 @@ func (s *Service) CreateInvite(ctx context.Context, m Member, nonce string) (str
 		return "", store.Invite{}, err
 	}
 	slog.Info("write", "action", "invite.create", "invite_id", inv.ID)
-	return s.s.PublicURL + "/i/" + tok, inv, nil
+	return s.s.InviteURL + "/i/" + tok, inv, nil
 }
 
 func (s *Service) Invites(ctx context.Context, m Member) ([]store.Invite, error) {
@@ -240,7 +243,7 @@ func (s *Service) notifyAdmins(ctx context.Context) {
 	admins, err := s.p.AdminGroupEmails(ctx, s.s.AdminGroup)
 	if err == nil && len(admins) > 0 {
 		err = s.m.Send(ctx, admins, "An invite application is waiting",
-			"Someone has accepted an invite and is waiting for approval.\n\n"+s.s.PublicURL+"/admin\n")
+			"Someone has accepted an invite and is waiting for approval.\n\n"+s.s.AccountURL+"/admin\n")
 	}
 	if err != nil {
 		slog.Warn("could not notify admins of a waiting application", "error", err)

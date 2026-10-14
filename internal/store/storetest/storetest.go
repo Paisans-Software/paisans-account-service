@@ -1,5 +1,5 @@
 // Package storetest gives each test its own migrated schema in the database
-// named by INVITE_TEST_DATABASE_URL, and skips when it is unset.
+// named by ACCOUNT_TEST_DATABASE_URL, and skips when it is unset.
 package storetest
 
 import (
@@ -12,14 +12,14 @@ import (
 	"testing"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/paisans-software/paisans-invite/internal/store"
+	"github.com/paisans-software/paisans-account-service/internal/store"
 )
 
 func New(t *testing.T) *store.Store {
 	t.Helper()
-	base := os.Getenv("INVITE_TEST_DATABASE_URL")
+	base := os.Getenv("ACCOUNT_TEST_DATABASE_URL")
 	if base == "" {
-		t.Skip("INVITE_TEST_DATABASE_URL is not set")
+		t.Skip("ACCOUNT_TEST_DATABASE_URL is not set")
 	}
 	ctx := context.Background()
 	schema := fmt.Sprintf("t_%d", rand.Uint64())

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/paisans-software/paisans-invite/internal/idp"
+	"github.com/paisans-software/paisans-account-service/internal/idp"
 )
 
 var _ idp.Provider = (*Fake)(nil)

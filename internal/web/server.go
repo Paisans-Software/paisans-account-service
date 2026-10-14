@@ -9,8 +9,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/paisans-software/paisans-invite/internal/config"
-	"github.com/paisans-software/paisans-invite/internal/flow"
+	"github.com/paisans-software/paisans-account-service/internal/config"
+	"github.com/paisans-software/paisans-account-service/internal/flow"
 )
 
 type pinger interface{ Ping(context.Context) error }
@@ -23,6 +23,12 @@ type Options struct {
 	Health         pinger
 	TrustForwarded bool
 	SessionKey     []byte
+	// AccountHost is the host every member and admin route is registered
+	// on, and InviteHost the one the invitee routes are, lowercase and
+	// without a port. InviteHost is empty with invites off.
+	AccountHost, InviteHost string
+	// Invites registers the invite routes; without it they do not exist.
+	Invites bool
 }
 
 type server struct {
@@ -33,7 +39,7 @@ type server struct {
 func itoa(n int64) string { return strconv.FormatInt(n, 10) }
 
 func New(ctx context.Context, cfg config.Config, f *flow.Service, health pinger) (http.Handler, error) {
-	s := sessions{key: cfg.SessionKey, secure: strings.HasPrefix(cfg.PublicURL, "https://")}
+	s := sessions{key: cfg.SessionKey, secure: strings.HasPrefix(cfg.AccountURL, "https://")}
 	a, err := newAuthenticator(ctx, cfg, s)
 	if err != nil {
 		return nil, err
@@ -45,27 +51,47 @@ func New(ctx context.Context, cfg config.Config, f *flow.Service, health pinger)
 	if err != nil {
 		return nil, err
 	}
-	return NewServer(Options{Flow: f, Sessions: s, Auth: auth, Render: r, Health: health, TrustForwarded: cfg.TrustForwarded, SessionKey: cfg.SessionKey}), nil
+	return NewServer(Options{Flow: f, Sessions: s, Auth: auth, Render: r, Health: health, TrustForwarded: cfg.TrustForwarded, SessionKey: cfg.SessionKey,
+		AccountHost: cfg.AccountHost(), InviteHost: cfg.InviteHost(), Invites: cfg.Invites}), nil
 }
 
+// NewServer registers each route on the host it belongs to, so a request
+// for a route on the other host matches nothing and gets a 404. /healthz
+// alone has no host: health checks reach the app by its mesh address.
 func NewServer(o Options) http.Handler {
 	s := &server{Options: o, limit: newLimiter()}
 	mux := http.NewServeMux()
 	static, _ := fs.Sub(staticFS, "static")
-	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServerFS(static)))
+	files := http.StripPrefix("/static/", http.FileServerFS(static))
+	a := o.AccountHost
 	mux.HandleFunc("GET /healthz", s.healthz)
-	mux.Handle("GET /auth/", o.Auth)
-	mux.HandleFunc("POST /auth/logout", s.member(s.logout))
-	mux.HandleFunc("GET /{$}", s.member(s.home))
-	mux.HandleFunc("POST /invites", s.member(s.createInvite))
-	mux.HandleFunc("POST /invites/{id}/revoke", s.member(s.revoke))
-	mux.HandleFunc("GET /admin", s.admin(s.queue))
-	mux.HandleFunc("POST /admin/applications/{id}/approve", s.admin(s.approve))
-	mux.HandleFunc("POST /admin/applications/{id}/decline", s.admin(s.decline))
-	mux.HandleFunc("POST /admin/applications/{id}/dismiss", s.admin(s.dismiss))
-	mux.HandleFunc("GET /i/{token}", s.limited(s.invitePage))
-	mux.HandleFunc("POST /i/{token}", s.limited(s.inviteSubmit))
-	return securityHeaders(mux)
+	mux.Handle("GET "+a+"/static/", files)
+	mux.Handle("GET "+a+"/auth/", o.Auth)
+	mux.HandleFunc("POST "+a+"/auth/logout", s.member(s.logout))
+	mux.HandleFunc("GET "+a+"/{$}", s.member(s.home))
+	mux.HandleFunc("GET "+a+"/admin", s.admin(s.queue))
+	if o.Invites {
+		i := o.InviteHost
+		mux.HandleFunc("POST "+a+"/invites", s.member(s.createInvite))
+		mux.HandleFunc("POST "+a+"/invites/{id}/revoke", s.member(s.revoke))
+		mux.HandleFunc("POST "+a+"/admin/applications/{id}/approve", s.admin(s.approve))
+		mux.HandleFunc("POST "+a+"/admin/applications/{id}/decline", s.admin(s.decline))
+		mux.HandleFunc("POST "+a+"/admin/applications/{id}/dismiss", s.admin(s.dismiss))
+		mux.Handle("GET "+i+"/static/", files)
+		mux.HandleFunc("GET "+i+"/i/{token}", s.limited(s.invitePage))
+		mux.HandleFunc("POST "+i+"/i/{token}", s.limited(s.inviteSubmit))
+	}
+	return securityHeaders(lowerHost(mux))
+}
+
+// lowerHost lowercases the request's host before routing, because ServeMux
+// matches a pattern's host exactly and browsers and proxies may send any
+// case. ServeMux itself drops the port before it matches.
+func lowerHost(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.Host = strings.ToLower(r.Host)
+		next.ServeHTTP(w, r)
+	})
 }
 
 func securityHeaders(h http.Handler) http.Handler {

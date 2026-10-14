@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/paisans-software/paisans-invite/internal/store"
-	"github.com/paisans-software/paisans-invite/internal/store/storetest"
+	"github.com/paisans-software/paisans-account-service/internal/store"
+	"github.com/paisans-software/paisans-account-service/internal/store/storetest"
 )
 
 var ctx = context.Background()

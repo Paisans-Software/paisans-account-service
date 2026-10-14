@@ -18,7 +18,7 @@ import (
 var allowedImports = map[string]bool{
 	"bytes": true, "context": true, "encoding/json": true, "errors": true, "fmt": true,
 	"io": true, "log/slog": true, "net/http": true, "net/url": true, "strings": true, "time": true,
-	"github.com/paisans-software/paisans-invite/internal/idp": true,
+	"github.com/paisans-software/paisans-account-service/internal/idp": true,
 }
 
 var httpWriteConsts = map[string]bool{
@@ -82,7 +82,7 @@ func TestWriteSurface(t *testing.T) {
 		Selections: map[*ast.SelectorExpr]*types.Selection{},
 	}
 	conf := types.Config{Importer: importer.ForCompiler(fset, "source", nil)}
-	pkg, err := conf.Check("github.com/paisans-software/paisans-invite/internal/idp/pocketid", fset, parsed, info)
+	pkg, err := conf.Check("github.com/paisans-software/paisans-account-service/internal/idp/pocketid", fset, parsed, info)
 	if err != nil {
 		t.Fatalf("type-checking the package: %v", err)
 	}

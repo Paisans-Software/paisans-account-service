@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/paisans-software/paisans-invite/internal/store/storetest"
+	"github.com/paisans-software/paisans-account-service/internal/store/storetest"
 )
 
 func TestMigrateTwice(t *testing.T) {

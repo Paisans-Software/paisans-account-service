@@ -55,7 +55,7 @@ func TestCallbackPreProviderRefusals(t *testing.T) {
 	for name, c := range cases {
 		req := httptest.NewRequest("GET", "/auth/callback?state="+c.query+"&code=x", nil)
 		if c.cookie != "" {
-			req.AddCookie(&http.Cookie{Name: "invite_login", Value: c.cookie})
+			req.AddCookie(&http.Cookie{Name: "account_login", Value: c.cookie})
 		}
 		rec := httptest.NewRecorder()
 		a.callback(rec, req)
@@ -63,7 +63,7 @@ func TestCallbackPreProviderRefusals(t *testing.T) {
 			t.Fatalf("%s: code %d", name, rec.Code)
 		}
 		for _, ck := range rec.Result().Cookies() {
-			if ck.Name == "invite_session" {
+			if ck.Name == "account_session" {
 				t.Fatalf("%s: session cookie set", name)
 			}
 		}
@@ -90,7 +90,7 @@ func TestLoginKeepsOnlyLocalNext(t *testing.T) {
 		var st loginState
 		var found bool
 		for _, c := range rec.Result().Cookies() {
-			if c.Name == "invite_login" {
+			if c.Name == "account_login" {
 				found = verify(key, "login", c.Value, &st)
 			}
 		}

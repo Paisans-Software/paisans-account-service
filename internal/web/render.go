@@ -35,7 +35,7 @@ type renderer struct {
 }
 
 // idpLink is the identity provider as a page shows it: the configured
-// INVITE_IDP_URL, and its host as the link text.
+// ACCOUNT_IDP_URL, and its host as the link text.
 type idpLink struct{ URL, Host string }
 
 // messageData is message.html's data. Recovery, when set, adds the line that

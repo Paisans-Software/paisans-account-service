@@ -1,5 +1,5 @@
-// Command paisans-invite serves member invites. See the README for its
-// environment.
+// Command paisans-account-service is the community's account service: invites
+// and their approval today. See the README for its environment.
 package main
 
 import (
@@ -14,18 +14,18 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/paisans-software/paisans-invite/internal/coc"
-	"github.com/paisans-software/paisans-invite/internal/config"
-	"github.com/paisans-software/paisans-invite/internal/flow"
-	"github.com/paisans-software/paisans-invite/internal/idp/pocketid"
-	"github.com/paisans-software/paisans-invite/internal/mail"
-	"github.com/paisans-software/paisans-invite/internal/store"
-	"github.com/paisans-software/paisans-invite/internal/web"
+	"github.com/paisans-software/paisans-account-service/internal/coc"
+	"github.com/paisans-software/paisans-account-service/internal/config"
+	"github.com/paisans-software/paisans-account-service/internal/flow"
+	"github.com/paisans-software/paisans-account-service/internal/idp/pocketid"
+	"github.com/paisans-software/paisans-account-service/internal/mail"
+	"github.com/paisans-software/paisans-account-service/internal/store"
+	"github.com/paisans-software/paisans-account-service/internal/web"
 )
 
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "healthcheck" {
-		os.Exit(healthcheck(os.Getenv("INVITE_LISTEN_ADDR")))
+		os.Exit(healthcheck(os.Getenv("ACCOUNT_LISTEN_ADDR")))
 	}
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
 	if err := run(); err != nil {
@@ -75,7 +75,7 @@ func run() error {
 	if err := st.Migrate(ctx); err != nil {
 		return err
 	}
-	c, err := coc.Load(cfg.CoCPath)
+	c, err := codeOfConduct(cfg)
 	if err != nil {
 		return err
 	}
@@ -89,7 +89,7 @@ func run() error {
 	}
 	f := flow.New(st, provider, sender, c, flow.Settings{
 		Quota: cfg.Quota, RequireApproval: cfg.RequireApproval, InviteLifetime: cfg.InviteLifetime,
-		PublicURL: cfg.PublicURL, EmailHashKey: cfg.EmailHashKey, AdminGroup: cfg.AdminGroup,
+		AccountURL: cfg.AccountURL, InviteURL: cfg.InviteURL, EmailHashKey: cfg.EmailHashKey, AdminGroup: cfg.AdminGroup,
 		LoginLinkDays: cfg.LoginLinkDays,
 	}, time.Now)
 	handler, err := web.New(ctx, cfg, f, st)
@@ -97,6 +97,8 @@ func run() error {
 		return err
 	}
 
+	// The sweeper runs whether or not invites are on: invites issued before
+	// they were turned off still expire, and their applications still age out.
 	go sweep(ctx, st, cfg)
 
 	srv := &http.Server{Addr: cfg.ListenAddr, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
@@ -110,12 +112,22 @@ func run() error {
 			slog.Warn("shutdown", "error", err)
 		}
 	}()
-	slog.Info("listening", "addr", cfg.ListenAddr, "coc_version", c.Version, "require_approval", cfg.RequireApproval)
+	slog.Info("listening", "addr", cfg.ListenAddr, "invites", cfg.Invites, "coc_version", c.Version, "require_approval", cfg.RequireApproval)
 	if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
 	<-done
 	return nil
+}
+
+// codeOfConduct loads the code of conduct invitees agree to. With invites
+// off nobody is shown it and the deployment mounts none, so there is nothing
+// to load.
+func codeOfConduct(cfg config.Config) (coc.CoC, error) {
+	if !cfg.Invites {
+		return coc.CoC{}, nil
+	}
+	return coc.Load(cfg.CoCPath)
 }
 
 func sweep(ctx context.Context, st *store.Store, cfg config.Config) {

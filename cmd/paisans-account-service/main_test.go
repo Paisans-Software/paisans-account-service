@@ -1,10 +1,18 @@
 package main
 
 import (
+	"context"
+	"crypto/sha256"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"testing"
+	"time"
+
+	"github.com/paisans-software/paisans-account-service/internal/config"
+	"github.com/paisans-software/paisans-account-service/internal/store"
+	"github.com/paisans-software/paisans-account-service/internal/store/storetest"
 )
 
 func serve(t *testing.T, status int) string {
@@ -45,5 +53,47 @@ func TestHealthcheck(t *testing.T) {
 	l.Close()
 	if got := healthcheck(":" + port); got != 1 {
 		t.Errorf("unreachable: got %d", got)
+	}
+}
+
+// With invites off there is no code of conduct to mount, and the service
+// starts without one; with invites on a missing one stops it.
+func TestCodeOfConductOnlyWithInvites(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "absent.md")
+	if _, err := codeOfConduct(config.Config{Invites: false, CoCPath: missing}); err != nil {
+		t.Fatalf("invites off: %v", err)
+	}
+	if _, err := codeOfConduct(config.Config{Invites: true, CoCPath: missing}); err == nil {
+		t.Fatal("invites on with no code of conduct must fail")
+	}
+}
+
+// The sweeper takes no notice of invites: with them off, an invite issued
+// while they were on still expires.
+func TestSweepRunsWithInvitesOff(t *testing.T) {
+	st := storetest.New(t)
+	ctx := context.Background()
+	h := sha256.Sum256([]byte("old"))
+	inv, err := st.CreateInvite(ctx, h[:], "sub", "alice", "AAAAAAAAAAAAAAAAAAAAAA", time.Now().Add(-time.Minute), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, cancel := context.WithCancel(ctx)
+	stopped := make(chan struct{})
+	go func() {
+		defer close(stopped)
+		sweep(run, st, config.Config{Invites: false, ApplicationWait: 14 * 24 * time.Hour, DeclineRetention: 183 * 24 * time.Hour})
+	}()
+	// sweep runs once at once, then waits an hour for the next.
+	var list []store.Invite
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+		if list, err = st.ListInvites(ctx, "sub"); err == nil && len(list) == 1 && list[0].State == "expired" {
+			break
+		}
+	}
+	cancel()
+	<-stopped
+	if len(list) != 1 || list[0].ID != inv.ID || list[0].State != "expired" {
+		t.Fatalf("invite not swept: %+v %v", list, err)
 	}
 }

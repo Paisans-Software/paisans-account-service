@@ -13,7 +13,7 @@ import (
 // such as "id." or "pid.", followed by a domain.
 var idpHostname = regexp.MustCompile(`(^|[^A-Za-z0-9_-])(p?id|auth|login|sso)\.[a-z0-9-]+\.[a-z]{2,}`)
 
-// The identity provider's URL comes only from INVITE_IDP_URL: no source or
+// The identity provider's URL comes only from ACCOUNT_IDP_URL: no source or
 // template under internal/ may name one.
 func TestNoHardCodedIDPHostname(t *testing.T) {
 	err := filepath.WalkDir("..", func(p string, d fs.DirEntry, err error) error {

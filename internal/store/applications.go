@@ -23,8 +23,12 @@ type Application struct {
 
 type NewApplication struct{ Username, Email, DisplayName, CoCVersion string }
 
-const appColumns = `a.id, a.invite_id, a.username, a.email, a.display_name, a.coc_version, a.agreed_at,
-	a.state, COALESCE(a.idp_user_id,''), i.inviter_sub, i.inviter_username, a.claimed_at`
+// appColumns are read FROM appFrom. A registration has no invite: its
+// InviteID is 0 and its inviter is empty.
+const appColumns = `a.id, COALESCE(a.invite_id,0), a.username, a.email, a.display_name, a.coc_version, a.agreed_at,
+	a.state, COALESCE(a.idp_user_id,''), COALESCE(i.inviter_sub,''), COALESCE(i.inviter_username,''), a.claimed_at`
+
+const appFrom = ` FROM applications a LEFT JOIN invites i ON i.id=a.invite_id`
 
 func scanApp(r pgx.Row) (Application, error) {
 	var a Application
@@ -63,7 +67,32 @@ func (s *Store) Apply(ctx context.Context, tokenHash []byte, now time.Time, n Ne
 		if err := audit(ctx, tx, "", "application.create", id); err != nil {
 			return err
 		}
-		a, err = scanApp(tx.QueryRow(ctx, `SELECT `+appColumns+` FROM applications a JOIN invites i ON i.id=a.invite_id WHERE a.id=$1`, id))
+		a, err = scanApp(tx.QueryRow(ctx, `SELECT `+appColumns+appFrom+` WHERE a.id=$1`, id))
+		return err
+	})
+	return a, err
+}
+
+// Register records an application made through open registration: the same
+// as Apply, with no invite.
+func (s *Store) Register(ctx context.Context, now time.Time, n NewApplication) (Application, error) {
+	var a Application
+	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+		var id int64
+		err := tx.QueryRow(ctx, `INSERT INTO applications (username, email, display_name, coc_version, agreed_at, state)
+			VALUES ($1,$2,$3,$4,$5,'pending') RETURNING id`,
+			n.Username, n.Email, n.DisplayName, n.CoCVersion, now).Scan(&id)
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == "applications_username" {
+			return ErrUsernameTaken
+		}
+		if err != nil {
+			return err
+		}
+		if err := audit(ctx, tx, "", "application.create", id); err != nil {
+			return err
+		}
+		a, err = scanApp(tx.QueryRow(ctx, `SELECT `+appColumns+appFrom+` WHERE a.id=$1`, id))
 		return err
 	})
 	return a, err
@@ -76,7 +105,7 @@ func (s *Store) PendingUsernameTaken(ctx context.Context, username string) (bool
 }
 
 func (s *Store) Application(ctx context.Context, id int64) (Application, error) {
-	a, err := scanApp(s.pool.QueryRow(ctx, `SELECT `+appColumns+` FROM applications a JOIN invites i ON i.id=a.invite_id WHERE a.id=$1`, id))
+	a, err := scanApp(s.pool.QueryRow(ctx, `SELECT `+appColumns+appFrom+` WHERE a.id=$1`, id))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Application{}, ErrNotFound
 	}
@@ -84,7 +113,7 @@ func (s *Store) Application(ctx context.Context, id int64) (Application, error) 
 }
 
 func (s *Store) PendingApplications(ctx context.Context) ([]Application, error) {
-	rows, err := s.pool.Query(ctx, `SELECT `+appColumns+` FROM applications a JOIN invites i ON i.id=a.invite_id ORDER BY a.agreed_at, a.id`)
+	rows, err := s.pool.Query(ctx, `SELECT `+appColumns+appFrom+` ORDER BY a.agreed_at, a.id`)
 	if err != nil {
 		return nil, err
 	}
@@ -132,7 +161,7 @@ func (s *Store) ClaimApplication(ctx context.Context, id int64, adminSub string,
 		if err := audit(ctx, tx, adminSub, "application.claim", id); err != nil {
 			return err
 		}
-		a, err = scanApp(tx.QueryRow(ctx, `SELECT `+appColumns+` FROM applications a JOIN invites i ON i.id=a.invite_id WHERE a.id=$1`, id))
+		a, err = scanApp(tx.QueryRow(ctx, `SELECT `+appColumns+appFrom+` WHERE a.id=$1`, id))
 		return err
 	})
 	if err != nil {
@@ -206,7 +235,7 @@ func (s *Store) MarkLinkUnsent(ctx context.Context, id int64, claim, idpUserID, 
 // the holder of claim.
 func (s *Store) CompleteApplication(ctx context.Context, id int64, claim, adminSub string) error {
 	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
-		var inviteID int64
+		var inviteID *int64
 		var username string
 		err := tx.QueryRow(ctx, `DELETE FROM applications
 			WHERE id=$1 AND state IN ('approving','link_unsent') AND claim_token=$2
@@ -235,7 +264,7 @@ func (s *Store) CompleteApplication(ctx context.Context, id int64, claim, adminS
 // ErrNotFound (it is declined, not dismissed); a live claim is ErrBusy.
 func (s *Store) DismissApplication(ctx context.Context, id int64, adminSub string, now time.Time) error {
 	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
-		var inviteID int64
+		var inviteID *int64
 		err := tx.QueryRow(ctx, `DELETE FROM applications
 			WHERE id=$1 AND state IN ('link_unsent','approving') AND (claim_token IS NULL OR claimed_at < $2)
 			RETURNING invite_id`, id, now.Add(-claimTimeout)).Scan(&inviteID)
@@ -254,7 +283,7 @@ func (s *Store) DismissApplication(ctx context.Context, id int64, adminSub strin
 
 func (s *Store) DeclineApplication(ctx context.Context, id int64, adminSub string, emailHMAC []byte) error {
 	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
-		var inviteID int64
+		var inviteID *int64
 		err := tx.QueryRow(ctx, `DELETE FROM applications WHERE id=$1 AND state='pending' RETURNING invite_id`, id).Scan(&inviteID)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return notFoundOrBusy(ctx, tx, id)

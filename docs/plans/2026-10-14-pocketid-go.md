@@ -1,6 +1,6 @@
 # The account service on pocketid-go Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** The service calls Pocket ID through the shared client `github.com/paisans-software/pocketid-go` v0.1.0, behind its unchanged `idp.Provider` interface, with the write surface pinned as strictly as before and the API key sent only to a private address.
 
@@ -42,10 +42,10 @@
 
 **Produces:** `Config.IDPNetworks []netip.Prefix`; `func (c Config) IDPPublicURL() string` (the issuer without a trailing slash).
 
-- [ ] Tests: `TestIDPURLMustBePrivate` accepts `http://10.44.0.1:1413`, `http://100.70.0.1:1413`, `http://[fd00::1]:1413`, `http://localhost:1411`, `http://pocket-id:1411`, and `http://203.0.113.5:1413` with `ACCOUNT_IDP_PRIVATE_NETWORKS=203.0.113.0/24`; refuses `https://id.example.org`, `http://203.0.113.5:1413`, `http://pocket-id.internal:1411` and `not a url`, each error naming `ACCOUNT_IDP_URL`. A malformed CIDR is refused naming `ACCOUNT_IDP_PRIVATE_NETWORKS`. `TestIDPPublicURL`: `https://id.example.org/` gives `https://id.example.org`. `TestRunRefusesPublicIDPURL` in `main_test.go` sets a complete environment with a public `ACCOUNT_IDP_URL` and an unreachable database, and `run()` fails naming the variable.
-- [ ] Run `go test ./internal/config/ ./cmd/...` — fails.
-- [ ] Implement in `Load`, using `pid.Private`; wire `IDPPublicURL()` into `web.New`'s renderer and `flow.Settings.IDPURL`; pass `IDPNetworks` to `pocketid.New`.
-- [ ] Run — passes. Commit.
+- [x] Tests: `TestIDPURLMustBePrivate` accepts `http://10.44.0.1:1413`, `http://100.70.0.1:1413`, `http://[fd00::1]:1413`, `http://localhost:1411`, `http://pocket-id:1411`, and `http://203.0.113.5:1413` with `ACCOUNT_IDP_PRIVATE_NETWORKS=203.0.113.0/24`; refuses `https://id.example.org`, `http://203.0.113.5:1413`, `http://pocket-id.internal:1411` and `not a url`, each error naming `ACCOUNT_IDP_URL`. A malformed CIDR is refused naming `ACCOUNT_IDP_PRIVATE_NETWORKS`. `TestIDPPublicURL`: `https://id.example.org/` gives `https://id.example.org`. `TestRunRefusesPublicIDPURL` in `main_test.go` sets a complete environment with a public `ACCOUNT_IDP_URL` and an unreachable database, and `run()` fails naming the variable.
+- [x] Run `go test ./internal/config/ ./cmd/...` — fails.
+- [x] Implement in `Load`, using `pid.Private`; wire `IDPPublicURL()` into `web.New`'s renderer and `flow.Settings.IDPURL`; pass `IDPNetworks` to `pocketid.New`.
+- [x] Run — passes. Commit.
 
 ### Task 2: The adapter on pid, test-first
 
@@ -79,15 +79,15 @@ func (c *Client) update(ctx context.Context, id string, change func(*pid.User)) 
 
 `CreateUser` sends `pid.NewUser{Username: u.Username, Email: &email, DisplayName: u.DisplayName}` with `email := strings.TrimSpace(u.Email)`; `SendLoginLink` calls `c.api.EmailLoginLink(ctx, userID, c.linkTTL)`; `ChangeGroups` keeps its six steps with the write `c.api.SetUserGroups(ctx, id, next)`. `wrap` maps a `*pid.APIError` with status 404 to `idp.ErrNotFound` and strips a `*url.Error`'s URL.
 
-- [ ] Tests first. `TestWriteSurface` (static, type-checked) pins: the import allowlist; every use of the `pid` package against an allowlist of types, `Private`, and the methods `Users`, `User`, `FindGroup`, `InGroup` (reads, anywhere) and `CreateUser`, `EmailLoginLink`, `SetAdmin`, `Demote`, `SetUserGroups` (writes, each called exactly once, from `CreateUser`, `SendLoginLink`, `update`, `update`, `ChangeGroups` respectively); a `pid` method used other than by calling it; exactly one `pid.Client` literal, in `New`, with keys `HTTP`, `BaseURL`, `APIKey`, `Networks`, and no assignment to its fields; no `pid.User` literal and no assignment to a `pid.User` field except Disabled in SetDisabled, Email and EmailVerified (only `true`) in SetEmail, DisplayName, FirstName and LastName in SetName; exactly one `pid.NewUser` literal, in CreateUser, with exactly those three keys from the argument; `update`'s shape above, including `if cur.IsAdmin { SetAdmin } else { Demote }` on `next`; `SendLoginLink`'s one call with `c.linkTTL`; `ChangeGroups`'s steps; the only `net/http` request built (`NewRequestWithContext`, `http.MethodGet` in place) and sent (`(*http.Client).Do`) in `listGroups`, no other `http.Method*` constant than GET anywhere, no write method spelled as a string, no request shortcut or `RoundTrip`; the exported surface. `TestWriteSurfaceOnTheWire` drives every exported method against a recording server and fails on any request outside the seven approved method and route pairs, and on any request without the key header. `TestUpdateKeepsAdmin` checks an admin's and a non-admin's update sends `isAdmin` as read. The existing HTTP-level tests stay, with the body changes `pid` brings: the create body is `username, email, firstName "", lastName "", displayName, isAdmin false`, and the link TTL is `"168h0m0s"`.
-- [ ] Run `go test ./internal/idp/...` — fails to build or fails.
-- [ ] Implement `client.go`; `go get github.com/paisans-software/pocketid-go@v0.1.0 && go mod tidy`.
-- [ ] Run `go vet ./... && go vet -tags contract ./... && go test -race ./...` — passes. Run the contract test against a fresh Pocket ID and Mailpit. Commit.
+- [x] Tests first. `TestWriteSurface` (static, type-checked) pins: the import allowlist; every use of the `pid` package against an allowlist of types, `Private`, and the methods `Users`, `User`, `FindGroup`, `InGroup` (reads, anywhere) and `CreateUser`, `EmailLoginLink`, `SetAdmin`, `Demote`, `SetUserGroups` (writes, each called exactly once, from `CreateUser`, `SendLoginLink`, `update`, `update`, `ChangeGroups` respectively); a `pid` method used other than by calling it; exactly one `pid.Client` literal, in `New`, with keys `HTTP`, `BaseURL`, `APIKey`, `Networks`, and no assignment to its fields; no `pid.User` literal and no assignment to a `pid.User` field except Disabled in SetDisabled, Email and EmailVerified (only `true`) in SetEmail, DisplayName, FirstName and LastName in SetName; exactly one `pid.NewUser` literal, in CreateUser, with exactly those three keys from the argument; `update`'s shape above, including `if cur.IsAdmin { SetAdmin } else { Demote }` on `next`; `SendLoginLink`'s one call with `c.linkTTL`; `ChangeGroups`'s steps; the only `net/http` request built (`NewRequestWithContext`, `http.MethodGet` in place) and sent (`(*http.Client).Do`) in `listGroups`, no other `http.Method*` constant than GET anywhere, no write method spelled as a string, no request shortcut or `RoundTrip`; the exported surface. `TestWriteSurfaceOnTheWire` drives every exported method against a recording server and fails on any request outside the seven approved method and route pairs, and on any request without the key header. `TestUpdateKeepsAdmin` checks an admin's and a non-admin's update sends `isAdmin` as read. The existing HTTP-level tests stay, with the body changes `pid` brings: the create body is `username, email, firstName "", lastName "", displayName, isAdmin false`, and the link TTL is `"168h0m0s"`.
+- [x] Run `go test ./internal/idp/...` — fails to build or fails.
+- [x] Implement `client.go`; `go get github.com/paisans-software/pocketid-go@v0.1.0 && go mod tidy`.
+- [x] Run `go vet ./... && go vet -tags contract ./... && go test -race ./...` — passes. Run the contract test against a fresh Pocket ID and Mailpit. Commit.
 
 ### Task 3: Documentation
 
 **Files:** `README.md`, `CHANGELOG.md`.
 
-- [ ] README: `ACCOUNT_IDP_URL` is Pocket ID's API at a private address, such as `http://<site mesh address>:1413`, refused at startup otherwise; `ACCOUNT_IDP_PRIVATE_NETWORKS`; `ACCOUNT_OIDC_ISSUER` is also the URL members are sent to.
-- [ ] CHANGELOG `[Unreleased]`: Changed (pocketid-go; ACCOUNT_IDP_URL must be private; links use the issuer), Added (ACCOUNT_IDP_PRIVATE_NETWORKS). Each bullet at most 35 words.
-- [ ] Commit.
+- [x] README: `ACCOUNT_IDP_URL` is Pocket ID's API at a private address, such as `http://<site mesh address>:1413`, refused at startup otherwise; `ACCOUNT_IDP_PRIVATE_NETWORKS`; `ACCOUNT_OIDC_ISSUER` is also the URL members are sent to.
+- [x] CHANGELOG `[Unreleased]`: Changed (pocketid-go; ACCOUNT_IDP_URL must be private; links use the issuer), Added (ACCOUNT_IDP_PRIVATE_NETWORKS). Each bullet at most 35 words.
+- [x] Commit.

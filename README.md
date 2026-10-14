@@ -10,6 +10,8 @@ paisans-account-service is the community's account service, a small Go service r
 
 Every admin action is an audit entry. No log line carries an address or a code.
 
+It calls Pocket ID's API through [pocketid-go](https://github.com/Paisans-Software/pocketid-go), the client the Paisans CLI uses, except the group listing, which pocketid-go does not offer and the service requests itself from the same address. The key goes only to a private address: loopback, RFC 1918, RFC 6598, IPv6 unique local, a network in `ACCOUNT_IDP_PRIVATE_NETWORKS`, or a hostname without a dot. A hostname with a dot is refused even when it resolves to a private address.
+
 It answers on two hosts, each registering only its own routes; a route requested on the other host is a 404:
 
 | Host | Routes |
@@ -32,10 +34,11 @@ The session cookie has no `Domain`, so the join host never holds a session. `/i/
 | `ACCOUNT_DATABASE_URL` | Postgres URL through the site's HAProxy |
 | `ACCOUNT_SESSION_KEY` | 32 bytes as unpadded base64url (43 characters) |
 | `ACCOUNT_EMAIL_HASH_KEY` | the same shape |
-| `ACCOUNT_OIDC_ISSUER` | the identity app's URL |
+| `ACCOUNT_OIDC_ISSUER` | the identity app's public URL: sign-in, the logo, and the links pages and mail send members to |
 | `ACCOUNT_OIDC_CLIENT_ID`, `ACCOUNT_OIDC_CLIENT_SECRET` | the service's own client |
 | `ACCOUNT_MEMBER_GROUP`, `ACCOUNT_ADMIN_GROUP` | group names in the `groups` claim |
-| `ACCOUNT_IDP_URL` | the identity app's URL, for the admin API and the logo |
+| `ACCOUNT_IDP_URL` | Pocket ID's API, which the key is sent to, at a private address such as `http://<site mesh address>:1413`; a public one stops the service at startup |
+| `ACCOUNT_IDP_PRIVATE_NETWORKS` | optional CIDR networks, comma separated, that `ACCOUNT_IDP_URL` may also be in, for a mesh outside the private ranges |
 | `ACCOUNT_IDP_API_KEY` | the static API key |
 | `ACCOUNT_SMTP_HOST`, `ACCOUNT_SMTP_PORT`, `ACCOUNT_SMTP_USER`, `ACCOUNT_SMTP_PASSWORD`, `ACCOUNT_SMTP_FROM` | mail |
 | `ACCOUNT_SMTP_TLS` | `none`, `starttls` or `tls` |
@@ -49,3 +52,7 @@ The session cookie has no `Domain`, so the join host never holds a session. `/i/
 ## Tests
 
 Run the tests: `ACCOUNT_TEST_DATABASE_URL=postgres://… go test ./...`
+
+`internal/idp/pocketid/writesurface_test.go` pins what the service may write at Pocket ID: creating a user, sending a sign-in link, updating a user's address, name or disabled state, and changing their groups. A failure there is a question for the founder, not a test to fix.
+
+The contract test runs against a real Pocket ID and Mailpit, as `.github/workflows/contract.yml` starts them: `go test -tags contract -run Contract ./internal/idp/pocketid/`. It creates users, so each run needs a fresh Pocket ID.

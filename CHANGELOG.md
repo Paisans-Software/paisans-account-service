@@ -5,6 +5,12 @@ All notable changes to this project are documented here, in the
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-14
+
+### Added
+
+- Admins change any user's groups at /admin/members/{id}/groups, sending only the groups added and removed. The operators group is shown but never changed, and each change is audited.
+
 ## [0.2.0] - 2026-10-14
 
 ### Changed

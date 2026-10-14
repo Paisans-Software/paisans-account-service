@@ -107,6 +107,7 @@ func TestEveryNewPostNeedsCSRF(t *testing.T) {
 		{member, "/account/email/confirm"},
 		{member, "/account/name"},
 		{admin, "/admin/members/s-alice/ban"},
+		{admin, "/admin/members/s-alice/groups"},
 		{admin, "/admin/bans/" + itoa(b.ID) + "/lift"},
 		{admin, "/admin/recovery"},
 		{ann, "/admin/recovery/" + itoa(r.ID) + "/approve"},

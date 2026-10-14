@@ -84,6 +84,8 @@ func NewServer(o Options) http.Handler {
 	mux.HandleFunc("GET "+a+"/admin/members", s.admin(s.members))
 	mux.HandleFunc("GET "+a+"/admin/members/{id}/ban", s.admin(s.banPage))
 	mux.HandleFunc("POST "+a+"/admin/members/{id}/ban", s.admin(s.banSubmit))
+	mux.HandleFunc("GET "+a+"/admin/members/{id}/groups", s.admin(s.groupsPage))
+	mux.HandleFunc("POST "+a+"/admin/members/{id}/groups", s.admin(s.groupsSubmit))
 	mux.HandleFunc("GET "+a+"/admin/bans", s.admin(s.bans))
 	mux.HandleFunc("POST "+a+"/admin/bans/{id}/lift", s.admin(s.lift))
 	mux.HandleFunc("GET "+a+"/admin/recovery", s.admin(s.recoveryPage))

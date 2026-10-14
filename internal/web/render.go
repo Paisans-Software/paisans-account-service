@@ -61,7 +61,7 @@ func newRenderer(accent, idpURL string) (*renderer, error) {
 		r.accent = template.CSS(accent)
 	}
 	for _, name := range []string{"home.html", "admin.html", "invite.html", "message.html",
-		"members.html", "ban.html", "bans.html", "email.html", "name.html", "recovery.html"} {
+		"members.html", "ban.html", "groups.html", "bans.html", "email.html", "name.html", "recovery.html"} {
 		t, err := template.ParseFS(templateFS, "templates/layout.html", "templates/"+name)
 		if err != nil {
 			return nil, err

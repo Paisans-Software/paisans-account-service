@@ -1,7 +1,7 @@
 {{define "content"}}
 <div class="card"><h1>Email address</h1>
 <p>Your address is {{with .Data.Current}}{{.}}{{else}}not set{{end}}.</p>
-{{if .Data.Operator}}<p>You are an operator. Operators can only change their address in the Paisans deployment configuration.</p>{{else}}
+{{if .Data.Operator}}<p>You are an operator. Operators can only change their address in the Paisan Stack deployment configuration.</p>{{else}}
 {{if .Data.Pending}}<h2>Enter your code</h2>
 <p>We sent a six-digit code to {{.Data.Pending}}. It expires 15 minutes after it was sent.</p>
 <form method="post" action="/account/email/confirm"><input type="hidden" name="csrf" value="{{.CSRF}}">

@@ -202,7 +202,7 @@ func TestChangeEmailThroughThePages(t *testing.T) {
 		t.Fatalf("%d %q", rec.Code, h.fake.User("s-alice").Email)
 	}
 	op := h.as(opal, "GET", "/account/email", nil).Body.String()
-	if strings.Contains(op, `action="/account/email"`) || !strings.Contains(op, "<p>You are an operator. Operators can only change their address in the Paisans deployment configuration.</p>") {
+	if strings.Contains(op, `action="/account/email"`) || !strings.Contains(op, "<p>You are an operator. Operators can only change their address in the Paisan Stack deployment configuration.</p>") {
 		t.Fatalf("operator page: %s", op)
 	}
 	if rec := h.as(opal, "POST", "/account/email", url.Values{"csrf": {"tok"}, "email": {"o2@x.org"}}); rec.Code != 422 || len(h.mail.To("o2@x.org")) != 0 {
@@ -230,7 +230,7 @@ func TestChangeNameThroughThePages(t *testing.T) {
 		t.Fatalf("operator: %d", rec.Code)
 	}
 	if op := h.as(opal, "GET", "/account/name", nil).Body.String(); strings.Contains(op, `name="display_name"`) ||
-		!strings.Contains(op, "<p>You are an operator. Operators can only change their name in the Paisans deployment configuration.</p>") {
+		!strings.Contains(op, "<p>You are an operator. Operators can only change their name in the Paisan Stack deployment configuration.</p>") {
 		t.Fatalf("operator page: %s", op)
 	}
 }

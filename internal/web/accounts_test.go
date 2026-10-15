@@ -146,6 +146,9 @@ func TestBanFromMembersPage(t *testing.T) {
 		t.Fatalf("ban buttons: %s", body)
 	}
 	page := h.as(admin, "GET", "/admin/members/s-alice/ban", nil).Body.String()
+	if op := h.as(admin, "GET", "/admin/members/s-opal/ban", nil).Body.String(); !strings.Contains(op, "<p>opal is an operator. Operators can only be managed in the Paisan Stack deployment configuration.</p>") {
+		t.Errorf("operator ban page: %s", op)
+	}
 	if !strings.Contains(page, "keeps them signed in until that session expires") {
 		t.Fatalf("no session notice: %s", page)
 	}
@@ -202,7 +205,7 @@ func TestChangeEmailThroughThePages(t *testing.T) {
 		t.Fatalf("%d %q", rec.Code, h.fake.User("s-alice").Email)
 	}
 	op := h.as(opal, "GET", "/account/email", nil).Body.String()
-	if strings.Contains(op, `action="/account/email"`) || !strings.Contains(op, "Operators change their address in the deployment's configuration.") {
+	if strings.Contains(op, `action="/account/email"`) || !strings.Contains(op, "<p>You are an operator. Operators can only change their address in the Paisan Stack deployment configuration.</p>") {
 		t.Fatalf("operator page: %s", op)
 	}
 	if rec := h.as(opal, "POST", "/account/email", url.Values{"csrf": {"tok"}, "email": {"o2@x.org"}}); rec.Code != 422 || len(h.mail.To("o2@x.org")) != 0 {
@@ -228,6 +231,10 @@ func TestChangeNameThroughThePages(t *testing.T) {
 	}
 	if rec := h.as(opal, "POST", "/account/name", url.Values{"csrf": {"tok"}, "display_name": {"X"}}); rec.Code != 422 || h.fake.User("s-opal").DisplayName != "Opal" {
 		t.Fatalf("operator: %d", rec.Code)
+	}
+	if op := h.as(opal, "GET", "/account/name", nil).Body.String(); strings.Contains(op, `name="display_name"`) ||
+		!strings.Contains(op, "<p>You are an operator. Operators can only change their name in the Paisan Stack deployment configuration.</p>") {
+		t.Fatalf("operator page: %s", op)
 	}
 }
 

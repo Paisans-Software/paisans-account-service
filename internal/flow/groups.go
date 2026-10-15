@@ -15,7 +15,7 @@ import (
 var (
 	// ErrOperatorsGroup is a change to who is in the operators group, which
 	// the deployment's configuration owns.
-	ErrOperatorsGroup = errors.New("the operators group is managed in the deployment's configuration, not here")
+	ErrOperatorsGroup = errors.New("the operators group can only be changed in the Paisan Stack deployment configuration")
 	// ErrNoSuchGroup is a change naming a group the identity provider does not have.
 	ErrNoSuchGroup = errors.New("that group no longer exists; reload the page")
 	// ErrNoGroupChange is a save that adds and removes nothing.

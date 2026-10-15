@@ -25,8 +25,8 @@ func TestRendererAccentIsSanitised(t *testing.T) {
 
 func TestRendererAccentValues(t *testing.T) {
 	for _, c := range []struct{ in, want string }{
-		{"oklch(0.63 0.2 15)", "--accent-color: oklch(0.63 0.2 15);"},
-		{"#336699", "--accent-color: #336699;"},
+		{"oklch(0.63 0.2 15)", "--primary: oklch(0.63 0.2 15); --ring: color-mix(in srgb, oklch(0.63 0.2 15) 50%, transparent);"},
+		{"#336699", "--primary: #336699; --ring: color-mix(in srgb, #336699 50%, transparent);"},
 		{"default", ""},
 		{"Default", ""},
 		{"", ""},
@@ -42,7 +42,7 @@ func TestRendererAccentValues(t *testing.T) {
 		r.page(rec, 200, "message.html", view{Title: "Hi", Data: map[string]string{"Heading": "Hello", "Body": "b"}})
 		out := rec.Body.String()
 		if c.want == "" {
-			if strings.Contains(out, "<style>") || strings.Contains(out, "--accent-color") {
+			if strings.Contains(out, "<style>") || strings.Contains(out, "data-accent") {
 				t.Errorf("%q: want no accent block, got %s", c.in, out)
 			}
 			continue
@@ -57,6 +57,50 @@ func TestStylesheetCarriesNotice(t *testing.T) {
 	b, err := staticFS.ReadFile("static/style.css")
 	if err != nil || !strings.Contains(string(b), "Pocket ID v2.18.0") || !strings.Contains(string(b), "BSD-2-Clause") {
 		t.Fatal("style.css must name its source version and licence")
+	}
+	if n, err := staticFS.ReadFile("static/NOTICE-gloock.txt"); err != nil || !strings.Contains(string(n), "SIL OPEN FONT LICENSE Version 1.1") {
+		t.Fatal("the Gloock font must ship with its licence")
+	}
+}
+
+func TestSidebarMarksTheCurrentPage(t *testing.T) {
+	r, err := newRenderer("", "https://id.example.org")
+	if err != nil {
+		t.Fatal(err)
+	}
+	render := func(name string, s *Session) string {
+		rec := httptest.NewRecorder()
+		r.page(rec, 200, name, view{Title: name, CSRF: "tok", Session: s, Data: map[string]any{}})
+		return rec.Body.String()
+	}
+	admin := &Session{Username: "alice", Admin: true}
+	if out := render("members.html", admin); !strings.Contains(out, `<a href="/admin/members" class="active" aria-current="page">Members</a>`) ||
+		strings.Contains(out, `<a href="/" class="active"`) {
+		t.Errorf("members page: %s", out)
+	}
+	if out := render("name.html", admin); !strings.Contains(out, `<a href="/" class="active" aria-current="page">Your account</a>`) {
+		t.Errorf("name page: %s", out)
+	}
+	if out := render("home.html", &Session{Username: "bob"}); strings.Contains(out, "/admin") || !strings.Contains(out, `class="sidebar"`) {
+		t.Errorf("a member sees no admin links: %s", out)
+	}
+	if out := render("message.html", nil); strings.Contains(out, `class="sidebar"`) {
+		t.Errorf("no sidebar without a session: %s", out)
+	}
+}
+
+func TestInviteLinkHasCopyButton(t *testing.T) {
+	r, err := newRenderer("", "https://id.example.org")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.page(rec, 200, "home.html", view{CSRF: "tok", Session: &Session{Username: "alice"},
+		Data: map[string]any{"InvitesOn": true, "NewLink": "https://join.example.org/i/abc"}})
+	out := rec.Body.String()
+	if !strings.Contains(out, `<p class="link" id="invite-link">https://join.example.org/i/abc</p>`) ||
+		!strings.Contains(out, `data-copy="invite-link" hidden>Copy link</button>`) {
+		t.Fatalf("no copy button for the link: %s", out)
 	}
 }
 
@@ -110,5 +154,18 @@ func TestRendererNeedsAbsoluteIDPURL(t *testing.T) {
 		if _, err := newRenderer("", u); err == nil {
 			t.Errorf("%q accepted", u)
 		}
+	}
+}
+
+func TestNamePageShowsUsernameAsCode(t *testing.T) {
+	r, err := newRenderer("", "https://id.example.org")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.page(rec, 200, "name.html", view{CSRF: "tok", Session: &Session{Username: "jane"},
+		Data: map[string]any{"Username": "jane", "Name": map[string]string{}}})
+	if out := rec.Body.String(); !strings.Contains(out, "<p>Your username is <code>jane</code>; it can not be changed.</p>") {
+		t.Fatalf("name page: %s", out)
 	}
 }

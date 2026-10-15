@@ -3,7 +3,7 @@
 <div class="card">
   <h1>Invite someone</h1>
   <p class="muted">{{.Data.Remaining}}</p>
-  {{with .Data.NewLink}}<p>Send this link to the person you are inviting. It works once{{with $.Data.Expires}}, until {{.}}{{end}}.</p><p class="link">{{.}}</p>{{end}}
+  {{with .Data.NewLink}}<p>Send this link to the person you are inviting. It works once{{with $.Data.Expires}}, until {{.}}{{end}}.</p><div class="copy-row"><p class="link" id="invite-link">{{.}}</p><button type="button" class="secondary" data-copy="invite-link" hidden>Copy link</button></div>{{end}}
   <form method="post" action="/invites"><input type="hidden" name="csrf" value="{{.CSRF}}"><input type="hidden" name="nonce" value="{{.Data.Nonce}}"><button>Make an invite link</button></form>
 </div>
 <div class="card">
@@ -22,5 +22,4 @@
   <h2>Your account</h2>
   <p><a href="/account/email">Change your email address</a> · <a href="/account/name">Change your name</a></p>
 </div>
-{{if .Session.Admin}}{{template "adminnav"}}{{end}}
 {{end}}

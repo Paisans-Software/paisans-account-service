@@ -23,7 +23,7 @@ import (
 )
 
 var (
-	ErrInvalidUsername = errors.New("username must be 1 to 50 letters, numbers, dots, underscores, hyphens or @, starting and ending with a letter or number")
+	ErrInvalidUsername = errors.New("username must be 1 to 50 lowercase letters, numbers, dots, underscores, hyphens or @, starting and ending with a letter or number")
 	ErrInvalidEmail    = errors.New("that does not look like an email address")
 	ErrInvalidName     = errors.New("display name must be 1 to 100 characters")
 	ErrUsernameTaken   = errors.New("that username is taken")
@@ -168,7 +168,7 @@ func (s *Service) OpenInvite(ctx context.Context, token string) (store.Invite, e
 }
 
 func (a Applicant) check() (Applicant, error) {
-	a.Username = strings.TrimSpace(a.Username)
+	a.Username = strings.ToLower(strings.TrimSpace(a.Username))
 	a.Email = strings.TrimSpace(a.Email)
 	a.DisplayName = strings.TrimSpace(a.DisplayName)
 	if !a.Agreed {

@@ -8,5 +8,4 @@
 <td>{{if .Current}}<form class="inline" method="post" action="/admin/bans/{{.ID}}/lift"><input type="hidden" name="csrf" value="{{$.CSRF}}"><button class="secondary">Lift</button></form>{{end}}</td>
 </tr>{{end}}</table>{{else}}<p class="muted">Nobody has been banned.</p>{{end}}
 </div>
-{{template "adminnav"}}
 {{end}}

@@ -23,10 +23,12 @@ type view struct {
 	// Notice is a server-chosen line of good news above the content.
 	Notice               string
 	Title, LogoURL, CSRF string
-	Accent               template.CSS
-	Session              *Session
-	Data                 any
-	Error                string
+	// Page is the template being rendered, so the layout marks its sidebar link.
+	Page    string
+	Accent  template.CSS
+	Session *Session
+	Data    any
+	Error   string
 }
 
 type renderer struct {
@@ -72,7 +74,7 @@ func newRenderer(accent, idpURL string) (*renderer, error) {
 }
 
 func (r *renderer) page(w http.ResponseWriter, status int, name string, v view) {
-	v.Accent, v.LogoURL = r.accent, r.logo
+	v.Accent, v.LogoURL, v.Page = r.accent, r.logo, name
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Content-Security-Policy", "default-src 'self'; img-src 'self' "+r.logo+"; style-src 'self' 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'")
 	w.WriteHeader(status)

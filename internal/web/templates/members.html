@@ -9,5 +9,4 @@
 <td><a href="/admin/members/{{.ID}}/groups">Groups</a> · {{if .Operator}}<span class="muted">Operator</span>{{else if .Self}}<span class="muted">You</span>{{else if .Ban}}<a href="/admin/bans">Banned</a>{{else}}<form class="inline" method="get" action="/admin/members/{{.ID}}/ban"><button class="destructive">Ban</button></form>{{end}}</td>
 </tr>{{end}}</table>{{else}}<p class="muted">Nobody matches.</p>{{end}}{{end}}
 </div>
-{{template "adminnav"}}
 {{end}}

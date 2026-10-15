@@ -5,6 +5,15 @@ All notable changes to this project are documented here, in the
 
 ## [Unreleased]
 
+### Changed
+
+- Signup lowercases the username before checking it, so the account is created in lowercase; the form lowercases as the person types. The README lists what a username may contain.
+- Pages look like Pocket ID's own settings: its header, a sidebar for the account and admin pages, and its cards, buttons, inputs, checkboxes, tables and alerts, with the Gloock font.
+
+### Added
+
+- The new invite link has a Copy link button.
+
 ## [0.4.0] - 2026-10-14
 
 ### Changed

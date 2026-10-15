@@ -156,3 +156,16 @@ func TestRendererNeedsAbsoluteIDPURL(t *testing.T) {
 		}
 	}
 }
+
+func TestNamePageShowsUsernameAsCode(t *testing.T) {
+	r, err := newRenderer("", "https://id.example.org")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.page(rec, 200, "name.html", view{CSRF: "tok", Session: &Session{Username: "jane"},
+		Data: map[string]any{"Username": "jane", "Name": map[string]string{}}})
+	if out := rec.Body.String(); !strings.Contains(out, "<p>Your username is <code>jane</code>; it can not be changed.</p>") {
+		t.Fatalf("name page: %s", out)
+	}
+}

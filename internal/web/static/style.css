@@ -240,6 +240,11 @@ td > p:last-child { margin-bottom: 0; }
 .card .coc > :first-child { margin-top: 0; }
 .coc > :last-child { margin-bottom: 0; }
 
+/* A username, wherever it is shown or typed */
+code, input#username { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+code { font-size: .8125rem; padding: .125rem .375rem; border-radius: var(--radius-md);
+	background: color-mix(in oklab, var(--input) 50%, transparent); }
+
 /* The invite link and its copy button */
 .copy-row { display: flex; gap: .5rem; align-items: center; margin-bottom: 1rem; }
 .link { flex: 1; min-width: 0; margin: 0; padding: .5rem .75rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;

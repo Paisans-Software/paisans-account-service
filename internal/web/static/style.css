@@ -234,8 +234,11 @@ td .muted { font-size: inherit; }
 td > p:last-child { margin-bottom: 0; }
 
 .muted { color: var(--muted-foreground); font-size: .875rem; }
-.coc { max-height: 24rem; overflow: auto; margin-bottom: 1rem; padding: 0 1rem;
+.coc { max-height: 24rem; overflow: auto; margin-bottom: 1rem; padding: 1rem 1.25rem;
 	border: 1px solid var(--border); border-radius: var(--radius-2xl); background: color-mix(in oklab, var(--muted) 40%, transparent); }
+.card .coc h1, .card .coc h2, .card .coc h3 { font-size: 1rem; margin: 1.25rem 0 .5rem; }
+.card .coc > :first-child { margin-top: 0; }
+.coc > :last-child { margin-bottom: 0; }
 
 /* The invite link and its copy button */
 .copy-row { display: flex; gap: .5rem; align-items: center; margin-bottom: 1rem; }

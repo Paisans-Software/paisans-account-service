@@ -146,6 +146,9 @@ func TestBanFromMembersPage(t *testing.T) {
 		t.Fatalf("ban buttons: %s", body)
 	}
 	page := h.as(admin, "GET", "/admin/members/s-alice/ban", nil).Body.String()
+	if op := h.as(admin, "GET", "/admin/members/s-opal/ban", nil).Body.String(); !strings.Contains(op, "<p>opal is an operator. Operators can only be managed in the Paisan Stack deployment configuration.</p>") {
+		t.Errorf("operator ban page: %s", op)
+	}
 	if !strings.Contains(page, "keeps them signed in until that session expires") {
 		t.Fatalf("no session notice: %s", page)
 	}

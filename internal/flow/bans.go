@@ -17,7 +17,7 @@ import (
 var (
 	// ErrOperator is an action the service refuses for an operator, who is
 	// managed in the deployment's configuration instead.
-	ErrOperator = errors.New("operators are managed in the deployment's configuration, not here")
+	ErrOperator = errors.New("operators can only be managed in the Paisan Stack deployment configuration")
 	// ErrSelf is an admin acting on their own account where another must.
 	ErrSelf = errors.New("you can't do that to your own account")
 	// ErrReasonRequired is a ban or recovery without its reason.

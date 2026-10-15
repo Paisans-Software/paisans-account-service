@@ -60,7 +60,8 @@ func TestGroupsPage(t *testing.T) {
 		t.Error("operator note on a member's page")
 	}
 	op := h.as(admin, "GET", "/admin/members/s-opal/groups", nil).Body.String()
-	if !strings.Contains(op, "next apply") || !regexp.MustCompile(`disabled checked`).MatchString(op) || strings.Contains(op, `value="g-operators"`) {
+	if !strings.Contains(op, "next apply") || !regexp.MustCompile(`disabled checked`).MatchString(op) || strings.Contains(op, `value="g-operators"`) ||
+		!strings.Contains(op, "operators · set in the Paisan Stack deployment configuration") {
 		t.Fatalf("operator page:\n%s", op)
 	}
 	if rec := h.as(member, "GET", "/admin/members/s-alice/groups", nil); rec.Code != 403 {

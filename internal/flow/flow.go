@@ -269,7 +269,7 @@ func (s *Service) submit(ctx context.Context, in Applicant, record func(store.Ne
 		slog.Warn("automatic approval failed; left for an admin", "application_id", app.ID, "error", err)
 	}
 	if err := s.m.Send(ctx, []string{app.Email}, "We received your application",
-		"Thank you for agreeing to the code of conduct. An admin will review your application, and you will get another email when they have.\n"); err != nil {
+		"Thank you for agreeing to the code of conduct. An admin will review your application, and you will get another email when they have approved it.\n"); err != nil {
 		slog.Warn("could not acknowledge an application", "error", err)
 	}
 	s.notifyAdmins(ctx, "An application is waiting", "Someone has applied to join and is waiting for approval.\n\n"+s.s.AccountURL+"/admin\n")

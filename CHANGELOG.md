@@ -5,6 +5,10 @@ All notable changes to this project are documented here, in the
 
 ## [Unreleased]
 
+### Fixed
+
+- The email acknowledging an application finishes its sentence: it says the applicant will get another email when an admin has approved it.
+
 ## [0.5.0] - 2026-10-16
 
 ### Changed

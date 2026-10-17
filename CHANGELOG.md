@@ -5,6 +5,8 @@ All notable changes to this project are documented here, in the
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-16
+
 ### Changed
 
 - Signup lowercases the username before checking it, so the account is created in lowercase; the form lowercases as the person types. The README lists what a username may contain.

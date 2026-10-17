@@ -26,6 +26,8 @@ var (
 	ErrInvalidUsername = errors.New("username must be 1 to 50 lowercase letters, numbers, dots, underscores, hyphens or @, starting and ending with a letter or number")
 	ErrInvalidEmail    = errors.New("that does not look like an email address")
 	ErrInvalidName     = errors.New("display name must be 1 to 100 characters")
+	ErrInvalidFirst    = errors.New("first name must be 1 to 50 characters")
+	ErrInvalidLast     = errors.New("last name must be at most 50 characters")
 	ErrUsernameTaken   = errors.New("that username is taken")
 	ErrEmailTaken      = errors.New("an account already uses that email address")
 	ErrNotAgreed       = errors.New("you need to agree to the code of conduct")
@@ -66,6 +68,7 @@ type Settings struct {
 
 type Applicant struct {
 	Username, Email, DisplayName string
+	FirstName, LastName          string
 	Agreed                       bool
 }
 
@@ -171,6 +174,8 @@ func (a Applicant) check() (Applicant, error) {
 	a.Username = strings.ToLower(strings.TrimSpace(a.Username))
 	a.Email = strings.TrimSpace(a.Email)
 	a.DisplayName = strings.TrimSpace(a.DisplayName)
+	a.FirstName = strings.TrimSpace(a.FirstName)
+	a.LastName = strings.TrimSpace(a.LastName)
 	if !a.Agreed {
 		return a, ErrNotAgreed
 	}
@@ -182,6 +187,12 @@ func (a Applicant) check() (Applicant, error) {
 	}
 	if n := utf8.RuneCountInString(a.DisplayName); n == 0 || n > idp.MaxDisplayName {
 		return a, ErrInvalidName
+	}
+	if n := utf8.RuneCountInString(a.FirstName); n == 0 || n > idp.MaxFirstName {
+		return a, ErrInvalidFirst
+	}
+	if utf8.RuneCountInString(a.LastName) > idp.MaxLastName {
+		return a, ErrInvalidLast
 	}
 	return a, nil
 }
@@ -251,7 +262,8 @@ func (s *Service) submit(ctx context.Context, in Applicant, record func(store.Ne
 		s.tellRefused(ctx, a.Email, refused)
 		return !s.s.RequireApproval, nil
 	}
-	app, err := record(store.NewApplication{Username: a.Username, Email: a.Email, DisplayName: a.DisplayName, CoCVersion: s.coc.Version})
+	app, err := record(store.NewApplication{Username: a.Username, Email: a.Email, DisplayName: a.DisplayName,
+		FirstName: a.FirstName, LastName: a.LastName, CoCVersion: s.coc.Version})
 	if errors.Is(err, store.ErrUsernameTaken) {
 		return false, ErrUsernameTaken
 	}
@@ -430,7 +442,8 @@ func (s *Service) createAccount(ctx context.Context, adminSub string, app store.
 		if err := s.available(ctx, app.Username, app.Email); err != nil {
 			return "", err
 		}
-		u, err := s.p.CreateUser(ctx, idp.NewUser{Username: app.Username, Email: app.Email, DisplayName: app.DisplayName})
+		u, err := s.p.CreateUser(ctx, idp.NewUser{Username: app.Username, Email: app.Email, DisplayName: app.DisplayName,
+			FirstName: app.FirstName, LastName: app.LastName})
 		if err != nil {
 			return "", err
 		}

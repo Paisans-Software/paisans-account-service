@@ -195,7 +195,7 @@ func TestOpenSignupRoutes(t *testing.T) {
 	if rec := h.get(joinHost, "/static/style.css"); rec.Code != http.StatusOK {
 		t.Errorf("static on join.: %d", rec.Code)
 	}
-	if _, err := h.flow.Register(context.Background(), flow.Applicant{Username: "bob", Email: "bob@x.org", DisplayName: "Bob", Agreed: true}); err != nil {
+	if _, err := h.flow.Register(context.Background(), flow.Applicant{Username: "bob", Email: "bob@x.org", DisplayName: "Bob", FirstName: "Bob", Agreed: true}); err != nil {
 		t.Fatal(err)
 	}
 	p, _ := h.flow.Pending(context.Background())

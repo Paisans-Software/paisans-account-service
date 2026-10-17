@@ -5,6 +5,10 @@ All notable changes to this project are documented here, in the
 
 ## [Unreleased]
 
+### Added
+
+- The join form asks for a first name and an optional last name, at most 50 characters each, and the account created at Pocket ID gets them. An application made before this has neither.
+
 ### Fixed
 
 - The email acknowledging an application finishes its sentence: it says the applicant will get another email when an admin has approved it.

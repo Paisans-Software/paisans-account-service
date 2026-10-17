@@ -166,11 +166,12 @@ func (c *Client) AdminGroupEmails(ctx context.Context, group string) ([]string, 
 	return out, nil
 }
 
-// CreateUser creates a user with an unverified address, no first or last
-// name, and not an administrator.
+// CreateUser creates a user with an unverified address, the applicant's
+// names, and not an administrator.
 func (c *Client) CreateUser(ctx context.Context, u idp.NewUser) (idp.User, error) {
 	email := strings.TrimSpace(u.Email)
-	out, err := c.api.CreateUser(ctx, pid.NewUser{Username: u.Username, Email: &email, DisplayName: u.DisplayName})
+	out, err := c.api.CreateUser(ctx, pid.NewUser{Username: u.Username, Email: &email,
+		DisplayName: u.DisplayName, FirstName: u.FirstName, LastName: u.LastName})
 	if err != nil {
 		return idp.User{}, wrap(err)
 	}

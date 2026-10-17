@@ -43,13 +43,15 @@ func (s *server) registerSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 	a := flow.Applicant{
 		Username: r.PostFormValue("username"), Email: r.PostFormValue("email"),
-		DisplayName: r.PostFormValue("display_name"), Agreed: r.PostFormValue("agree") == "yes",
+		DisplayName: r.PostFormValue("display_name"),
+		FirstName:   r.PostFormValue("first_name"), LastName: r.PostFormValue("last_name"), Agreed: r.PostFormValue("agree") == "yes",
 	}
 	now, err := s.Flow.Register(r.Context(), a)
 	switch {
 	case validationSentence(err) != "":
 		s.registerView(http.StatusUnprocessableEntity, w, capitalise(validationSentence(err)),
-			inviteData{Username: a.Username, DisplayName: a.DisplayName, Email: a.Email})
+			inviteData{Username: a.Username, DisplayName: a.DisplayName, Email: a.Email,
+				FirstName: a.FirstName, LastName: a.LastName})
 	case err != nil:
 		s.fail(w, err)
 	default:

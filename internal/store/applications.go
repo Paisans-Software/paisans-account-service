@@ -14,6 +14,7 @@ import (
 type Application struct {
 	ID, InviteID                             int64
 	Username, Email, DisplayName, CoCVersion string
+	FirstName, LastName                      string
 	AgreedAt                                 time.Time
 	State, IDPUserID                         string
 	InviterSub, InviterUsername              string
@@ -21,11 +22,13 @@ type Application struct {
 	ClaimedAt time.Time
 }
 
-type NewApplication struct{ Username, Email, DisplayName, CoCVersion string }
+type NewApplication struct {
+	Username, Email, DisplayName, FirstName, LastName, CoCVersion string
+}
 
 // appColumns are read FROM appFrom. A registration has no invite: its
 // InviteID is 0 and its inviter is empty.
-const appColumns = `a.id, COALESCE(a.invite_id,0), a.username, a.email, a.display_name, a.coc_version, a.agreed_at,
+const appColumns = `a.id, COALESCE(a.invite_id,0), a.username, a.email, a.display_name, a.first_name, a.last_name, a.coc_version, a.agreed_at,
 	a.state, COALESCE(a.idp_user_id,''), COALESCE(i.inviter_sub,''), COALESCE(i.inviter_username,''), a.claimed_at`
 
 const appFrom = ` FROM applications a LEFT JOIN invites i ON i.id=a.invite_id`
@@ -33,7 +36,7 @@ const appFrom = ` FROM applications a LEFT JOIN invites i ON i.id=a.invite_id`
 func scanApp(r pgx.Row) (Application, error) {
 	var a Application
 	var claimed *time.Time
-	err := r.Scan(&a.ID, &a.InviteID, &a.Username, &a.Email, &a.DisplayName, &a.CoCVersion, &a.AgreedAt,
+	err := r.Scan(&a.ID, &a.InviteID, &a.Username, &a.Email, &a.DisplayName, &a.FirstName, &a.LastName, &a.CoCVersion, &a.AgreedAt,
 		&a.State, &a.IDPUserID, &a.InviterSub, &a.InviterUsername, &claimed)
 	if claimed != nil {
 		a.ClaimedAt = *claimed
@@ -54,9 +57,9 @@ func (s *Store) Apply(ctx context.Context, tokenHash []byte, now time.Time, n Ne
 			return err
 		}
 		var id int64
-		err = tx.QueryRow(ctx, `INSERT INTO applications (invite_id, username, email, display_name, coc_version, agreed_at, state)
-			VALUES ($1,$2,$3,$4,$5,$6,'pending') RETURNING id`,
-			inviteID, n.Username, n.Email, n.DisplayName, n.CoCVersion, now).Scan(&id)
+		err = tx.QueryRow(ctx, `INSERT INTO applications (invite_id, username, email, display_name, first_name, last_name, coc_version, agreed_at, state)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'pending') RETURNING id`,
+			inviteID, n.Username, n.Email, n.DisplayName, n.FirstName, n.LastName, n.CoCVersion, now).Scan(&id)
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == "applications_username" {
 			return ErrUsernameTaken // the whole transaction rolls back, so the invite stays open
@@ -79,9 +82,9 @@ func (s *Store) Register(ctx context.Context, now time.Time, n NewApplication) (
 	var a Application
 	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
 		var id int64
-		err := tx.QueryRow(ctx, `INSERT INTO applications (username, email, display_name, coc_version, agreed_at, state)
-			VALUES ($1,$2,$3,$4,$5,'pending') RETURNING id`,
-			n.Username, n.Email, n.DisplayName, n.CoCVersion, now).Scan(&id)
+		err := tx.QueryRow(ctx, `INSERT INTO applications (username, email, display_name, first_name, last_name, coc_version, agreed_at, state)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,'pending') RETURNING id`,
+			n.Username, n.Email, n.DisplayName, n.FirstName, n.LastName, n.CoCVersion, now).Scan(&id)
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == "applications_username" {
 			return ErrUsernameTaken

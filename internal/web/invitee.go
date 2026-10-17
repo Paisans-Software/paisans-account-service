@@ -19,6 +19,7 @@ type inviteData struct {
 	Inviter                      string
 	CoC                          template.HTML
 	Username, DisplayName, Email string
+	FirstName, LastName          string
 }
 
 func (s *server) unusable(w http.ResponseWriter) {
@@ -63,7 +64,8 @@ func (s *server) inviteSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 	a := flow.Applicant{
 		Username: r.PostFormValue("username"), Email: r.PostFormValue("email"),
-		DisplayName: r.PostFormValue("display_name"), Agreed: r.PostFormValue("agree") == "yes",
+		DisplayName: r.PostFormValue("display_name"),
+		FirstName:   r.PostFormValue("first_name"), LastName: r.PostFormValue("last_name"), Agreed: r.PostFormValue("agree") == "yes",
 	}
 	now, err := s.Flow.Apply(r.Context(), tok, a)
 	switch {
@@ -77,7 +79,8 @@ func (s *server) inviteSubmit(w http.ResponseWriter, r *http.Request) {
 		}
 		s.Render.page(w, http.StatusUnprocessableEntity, "invite.html", view{Title: "You have been invited",
 			CSRF: inviteeCSRF(s.SessionKey, th), Error: capitalise(validationSentence(err)),
-			Data: inviteData{Inviter: inv.InviterUsername, CoC: s.Flow.CoC().HTML, Username: a.Username, DisplayName: a.DisplayName, Email: a.Email}})
+			Data: inviteData{Inviter: inv.InviterUsername, CoC: s.Flow.CoC().HTML, Username: a.Username, DisplayName: a.DisplayName, Email: a.Email,
+				FirstName: a.FirstName, LastName: a.LastName}})
 	case err != nil:
 		s.fail(w, err)
 	default:
@@ -115,7 +118,7 @@ func capitalise(s string) string {
 }
 
 var validationErrors = []error{flow.ErrInvalidUsername, flow.ErrInvalidEmail, flow.ErrInvalidName,
-	flow.ErrUsernameTaken, flow.ErrNotAgreed}
+	flow.ErrInvalidFirst, flow.ErrInvalidLast, flow.ErrUsernameTaken, flow.ErrNotAgreed}
 
 // validationSentence returns the flow sentinel's own text, never a wrapper's.
 func validationSentence(err error) string {

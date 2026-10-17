@@ -8,9 +8,8 @@
 <label for="reason">Reason</label><input type="text" id="reason" name="reason" value="{{.Data.Reason}}" maxlength="1000" required>
 <p class="muted">Other admins see this on the list of bans.</p>
 <p><button class="destructive">Ban</button></p></form>
-{{else if .Data.Member.Operator}}<p>Operators are managed in the deployment's configuration, not here.</p>
+{{else if .Data.Member.Operator}}<p>{{.Data.Member.Username}} is an operator. Operators can only be managed in the Paisan Stack deployment configuration.</p>
 {{else if .Data.Member.Self}}<p>You can't ban yourself.</p>
 {{else}}<p>They are already banned.</p>{{end}}
 </div>
-{{template "adminnav"}}
 {{end}}

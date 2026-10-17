@@ -132,7 +132,7 @@ var errorCodes = map[string]string{
 	"not_found": "That no longer exists, or is no longer waiting.",
 	"same":      "You opened this request, so another admin must approve it.",
 	"self":      "You can't do that to your own account.",
-	"operator":  "Operators are managed in the deployment's configuration, not here.",
+	"operator":  "Operators can only be managed in the Paisan Stack deployment configuration.",
 	"refused":   "That address is now used by another account or matches a ban; cancel this request and open a new one.",
 	"banned":    "That member is banned; lift the ban first.",
 	"busy":      "Another admin is approving this request; refresh in a moment.",

@@ -22,6 +22,18 @@ It answers on two hosts, each registering only its own routes; a route requested
 
 The session cookie has no `Domain`, so the join host never holds a session. `/i/{token}`, `POST /` on the join host, and the address-change posts are rate limited per client address.
 
+## Usernames
+
+A username is chosen once, at signup, and never changes. The service trims surrounding spaces and lowercases it before checking it, so `Alice` and `alice` are the same name and the account is created as `alice`; the signup form lowercases as the person types, so they see the name they will get.
+
+After lowercasing, a username is allowed when it:
+
+* is 1 to 50 characters long;
+* uses only `a`–`z`, `0`–`9`, `.` (dot), `_` (underscore), `-` (hyphen) and `@`;
+* starts and ends with a letter or a number.
+
+Anything else is refused with the reason on the form: spaces anywhere inside, accented or other non-ASCII letters, emoji, and every other symbol. `alice`, `alice.b`, `a_1`, `bob-smith` and `x` are allowed; `.alice`, `alice-`, `al ice` and `zoë` are not. These are Pocket ID's own rule (`UsernameRule` in `internal/idp/idp.go`), narrowed to lowercase. A name that differs from an existing one only in case is taken.
+
 ## Environment
 
 | Variable | Meaning |

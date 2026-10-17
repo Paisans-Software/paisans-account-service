@@ -100,6 +100,19 @@ func TestNoApprovalCreatesAtOnce(t *testing.T) {
 	}
 }
 
+func TestApplyLowercasesTheUsername(t *testing.T) {
+	s, f, _ := setup(t, false)
+	link, _, _ := s.CreateInvite(ctx, alice, flow.NewNonce())
+	a := bob()
+	a.Username = " Bob.Smith "
+	if _, err := s.Apply(ctx, token(t, link), a); err != nil {
+		t.Fatal(err)
+	}
+	if u, ok, _ := f.FindUser(ctx, "bob.smith"); !ok || u.Username != "bob.smith" {
+		t.Fatalf("want bob.smith, got %q", u.Username)
+	}
+}
+
 func TestApplyRefusals(t *testing.T) {
 	s, f, _ := setup(t, true)
 	f.Users = append(f.Users, idp.User{ID: "x", Username: "Taken", Email: "used@example.org"})

@@ -18,5 +18,4 @@
 {{else if .Expired}}<span class="muted">expired</span>{{else}}<span class="muted">{{.State}}{{with .ApprovedBy}} by {{.}}{{end}}</span>{{end}}</td>
 </tr>{{end}}</table>{{else}}<p class="muted">No requests.</p>{{end}}
 </div>
-{{template "adminnav"}}
 {{end}}

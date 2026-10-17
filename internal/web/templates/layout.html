@@ -1,16 +1,31 @@
 {{define "layout"}}<!doctype html>
-<html lang="en">
+<html lang="en"{{if .Accent}} data-accent{{end}}>
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{.Title}}</title>
 <link rel="stylesheet" href="/static/style.css">
-{{if .Accent}}<style>:root{--accent-color: {{.Accent}};}</style>{{end}}
+{{if .Accent}}<style>:root{--primary: {{.Accent}}; --ring: color-mix(in srgb, {{.Accent}} 50%, transparent);}</style>{{end}}
+<script src="/static/app.js" defer></script>
 </head>
-<body><main>
-<header><img src="{{.LogoURL}}" alt=""><span>{{if .Session}}Signed in as {{.Session.Username}}{{end}}</span></header>
+<body>
+<header class="topbar"><div class="topbar-inner">
+{{if .Session}}<a class="brand" href="/">{{else}}<div class="brand">{{end}}<img src="{{.LogoURL}}" alt=""><span class="brand-sep"></span><span class="brand-name">Account</span>{{if .Session}}</a>{{else}}</div>{{end}}
+{{if .Session}}<span class="who">Signed in as {{.Session.Username}}</span>{{end}}
+</div></header>
+<main class="shell{{if .Session}} with-nav{{end}}">
+{{if .Session}}<nav class="sidebar" aria-label="Account">
+<a href="/"{{if eq .Page "home.html" "email.html" "name.html"}} class="active" aria-current="page"{{end}}>Your account</a>
+{{if .Session.Admin}}<p class="sidebar-group">Administration</p>
+<ul>
+<li><a href="/admin"{{if eq .Page "admin.html"}} class="active" aria-current="page"{{end}}>Applications</a></li>
+<li><a href="/admin/members"{{if eq .Page "members.html" "ban.html" "groups.html"}} class="active" aria-current="page"{{end}}>Members</a></li>
+<li><a href="/admin/bans"{{if eq .Page "bans.html"}} class="active" aria-current="page"{{end}}>Bans</a></li>
+<li><a href="/admin/recovery"{{if eq .Page "recovery.html"}} class="active" aria-current="page"{{end}}>Recovery</a></li>
+</ul>{{end}}
+</nav>{{end}}
+<div class="content">
 {{if .Error}}<div class="alert error" role="alert">{{.Error}}</div>{{end}}
-{{if .Notice}}<div class="alert" role="status">{{.Notice}}</div>{{end}}
+{{if .Notice}}<div class="alert success" role="status">{{.Notice}}</div>{{end}}
 {{template "content" .}}
+</div>
 </main></body></html>{{end}}
-
-{{define "adminnav"}}<p class="muted"><a href="/admin">Applications</a> · <a href="/admin/members">Members</a> · <a href="/admin/bans">Bans</a> · <a href="/admin/recovery">Recovery</a> · <a href="/">Your account</a></p>{{end}}

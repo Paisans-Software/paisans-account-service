@@ -34,7 +34,7 @@ func post(h harness, path string, form url.Values) *httptest.ResponseRecorder {
 }
 
 func form(csrf string) url.Values {
-	return url.Values{"csrf": {csrf}, "agree": {"yes"}, "username": {"bob"}, "display_name": {"Bob"}, "email": {"bob@x.org"}}
+	return url.Values{"csrf": {csrf}, "agree": {"yes"}, "username": {"bob"}, "display_name": {"Bob"}, "first_name": {"Bob"}, "last_name": {"Ross"}, "email": {"bob@x.org"}}
 }
 
 func TestInvitePageShowsCoC(t *testing.T) {
@@ -81,6 +81,9 @@ func TestSubmitAndReuse(t *testing.T) {
 	if strings.Contains(body, "Link expired") || strings.Contains(body, "<a ") {
 		t.Fatalf("the approval page carries nothing else: %s", body)
 	}
+	if p, _ := h.flow.Pending(context.Background()); len(p) != 1 || p[0].FirstName != "Bob" || p[0].LastName != "Ross" {
+		t.Fatalf("the application keeps the first and last name: %+v", p)
+	}
 	if rec := post(h, "/i/"+tok, form(csrf)); rec.Code != 404 {
 		t.Fatalf("second use must be the neutral page: %d", rec.Code)
 	}
@@ -94,6 +97,12 @@ func TestValidationKeepsInput(t *testing.T) {
 	rec := post(h, "/i/"+tok, f)
 	if rec.Code != 422 || !strings.Contains(rec.Body.String(), "bob@x.org") || !strings.Contains(rec.Body.String(), "Username must") {
 		t.Fatalf("%d", rec.Code)
+	}
+	f = form(csrf)
+	f.Set("first_name", " ")
+	rec = post(h, "/i/"+tok, f)
+	if body := rec.Body.String(); rec.Code != 422 || !strings.Contains(body, "First name must") || !strings.Contains(body, `value="Ross"`) {
+		t.Fatalf("%d %s", rec.Code, body)
 	}
 }
 

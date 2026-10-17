@@ -28,7 +28,7 @@ type Name struct{ DisplayName, FirstName, LastName string }
 
 const MaxFirstName, MaxLastName = 50, 50
 
-type NewUser struct{ Username, Email, DisplayName string }
+type NewUser struct{ Username, Email, DisplayName, FirstName, LastName string }
 
 // OperatorsGroup is the group the deployment's configuration owns: the
 // service shows it and never changes who is in it.

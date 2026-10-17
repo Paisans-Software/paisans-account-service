@@ -9,6 +9,8 @@
 <label for="username">Username</label><input type="text" id="username" name="username" value="{{.Data.Username}}" maxlength="50" required autocomplete="username" autocapitalize="none" spellcheck="false" data-lowercase>
 <p class="muted">Other members see this, and it cannot be changed later. Lowercase letters, numbers, dots, underscores, hyphens and @, starting and ending with a letter or number.</p>
 <label for="display_name">Display name</label><input type="text" id="display_name" name="display_name" value="{{.Data.DisplayName}}" maxlength="100" required autocomplete="name">
+<label for="first_name">First name</label><input type="text" id="first_name" name="first_name" value="{{.Data.FirstName}}" maxlength="50" required autocomplete="given-name">
+<label for="last_name">Last name</label><input type="text" id="last_name" name="last_name" value="{{.Data.LastName}}" maxlength="50" autocomplete="family-name">
 <label for="email">Email</label><input type="email" id="email" name="email" value="{{.Data.Email}}" required autocomplete="email">
 <p class="muted">Your sign-in link will be sent here.</p>
 <p><button>Join</button></p>

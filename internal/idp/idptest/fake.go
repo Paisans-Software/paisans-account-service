@@ -110,7 +110,8 @@ func (f *Fake) CreateUser(_ context.Context, n idp.NewUser) (idp.User, error) {
 		return idp.User{}, f.FailCreate
 	}
 	f.Created++
-	u := idp.User{ID: fmt.Sprintf("id-%d", f.Created), Username: n.Username, Email: strings.TrimSpace(n.Email), DisplayName: n.DisplayName}
+	u := idp.User{ID: fmt.Sprintf("id-%d", f.Created), Username: n.Username, Email: strings.TrimSpace(n.Email), DisplayName: n.DisplayName,
+		FirstName: n.FirstName, LastName: n.LastName}
 	f.Users = append(f.Users, u)
 	if after := f.AfterCreate; after != nil {
 		f.mu.Unlock()

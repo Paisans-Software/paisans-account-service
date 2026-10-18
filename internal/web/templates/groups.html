@@ -1,7 +1,7 @@
 {{define "content"}}
 <div class="card"><h1>Groups of {{.Data.Page.Member.Username}}</h1>
 <p>{{.Data.Page.Member.DisplayName}}<br><span class="muted">{{.Data.Page.Member.Username}} · {{.Data.Page.Member.Email}}</span></p>
-{{if .Data.Page.Operator}}<p>{{.Data.Page.Member.Username}} is an operator. Their other groups can change here, but the next apply puts an operator back in members, operators and every app's admin and member group.</p>{{end}}
+{{if .Data.Page.Operator}}<p>{{.Data.Page.Member.Username}} is an operator. Their other groups can change here, but the next paisans deployment apply puts an operator back in members, operators and every app's admin and member group.</p>{{end}}
 <form method="post"><input type="hidden" name="csrf" value="{{.CSRF}}">
 {{range .Data.Page.Groups}}{{if .Locked}}<div class="check"><input type="checkbox" id="grp-{{.ID}}" disabled{{if .In}} checked{{end}}><label for="grp-{{.ID}}" style="margin:0">{{.FriendlyName}} <span class="muted">{{.Name}} · set in the Paisan Stack deployment configuration</span></label></div>
 {{else}}{{if .In}}<input type="hidden" name="was" value="{{.ID}}">{{end}}<div class="check"><input type="checkbox" id="grp-{{.ID}}" name="group" value="{{.ID}}"{{if .In}} checked{{end}}><label for="grp-{{.ID}}" style="margin:0">{{.FriendlyName}} <span class="muted">{{.Name}}</span></label></div>

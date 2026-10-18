@@ -9,6 +9,10 @@ All notable changes to this project are documented here, in the
 
 - The join form asks for a first name and an optional last name, at most 50 characters each, and the account created at Pocket ID gets them. An application made before this has neither.
 
+### Changed
+
+- The groups page and README name the command that restores an operator's groups `paisans deployment apply`, its name since the toolkit moved apply under `deployment`.
+
 ### Fixed
 
 - The email acknowledging an application finishes its sentence: it says the applicant will get another email when an admin has approved it.

@@ -10,7 +10,7 @@
 <body>
 <header class="topbar"><div class="topbar-inner">
 {{if .Session}}<a class="brand" href="/">{{else}}<div class="brand">{{end}}<img src="{{.LogoURL}}" alt=""><span class="brand-sep"></span><span class="brand-name">Account</span>{{if .Session}}</a>{{else}}</div>{{end}}
-{{if .Session}}<span class="who">Signed in as {{.Session.Username}}</span>{{end}}
+{{if .Session}}<div class="who"><span>Signed in as {{.Session.Username}}</span><form class="inline" method="post" action="/auth/logout"><input type="hidden" name="csrf" value="{{.Session.CSRF}}"><button class="secondary">Sign out</button></form></div>{{end}}
 </div></header>
 <main class="shell{{if .Session}} with-nav{{end}}">
 {{if .Session}}<nav class="sidebar" aria-label="Account">

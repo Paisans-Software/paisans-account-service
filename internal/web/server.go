@@ -153,6 +153,14 @@ func (s *server) member(h sessionHandler) http.HandlerFunc {
 			http.Error(w, "Forbidden", http.StatusForbidden)
 			return
 		}
+		// The admin flag the session signed in with goes stale the moment
+		// an admin changes the user's groups, so it is read afresh.
+		admin, err := s.Flow.IsAdmin(r.Context(), sess.Sub)
+		if err != nil {
+			s.fail(w, err)
+			return
+		}
+		sess.Admin = admin
 		h(w, r, sess)
 	}
 }

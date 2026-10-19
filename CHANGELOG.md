@@ -5,6 +5,14 @@ All notable changes to this project are documented here, in the
 
 ## [Unreleased]
 
+### Added
+
+- Every signed-in page has a Sign out button in its header. The sign-out route had no button, so signing out of Pocket ID left this service's own session in place.
+
+### Fixed
+
+- A promotion to the admin group or a demotion from it takes effect on the user's next request. The session kept the admin flag it signed in with for its eight hours, so a promoted admin got "Forbidden" at `/admin` and a demoted one kept admin rights here.
+
 ## [0.5.1] - 2026-10-19
 
 ### Added

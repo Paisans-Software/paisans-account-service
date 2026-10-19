@@ -43,6 +43,24 @@ type Member struct {
 	Admin         bool
 }
 
+// IsAdmin reports whether the user is in the admin group at the identity
+// provider now. A user it no longer has is not an admin.
+func (s *Service) IsAdmin(ctx context.Context, sub string) (bool, error) {
+	gs, err := s.p.UserGroups(ctx, sub)
+	if errors.Is(err, idp.ErrNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	for _, g := range gs {
+		if g.Name == s.s.AdminGroup {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 type Settings struct {
 	Quota           int
 	RequireApproval bool

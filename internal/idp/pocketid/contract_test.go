@@ -43,6 +43,15 @@ func TestContract(t *testing.T) {
 		t.Fatalf("email search must ignore case: %v %v", taken, err)
 	}
 
+	// The address is stored verified, so ID tokens say email_verified true.
+	var created struct {
+		EmailVerified bool `json:"emailVerified"`
+	}
+	api(t, base, key, http.MethodGet, "/api/users/"+u.ID, nil, &created)
+	if !created.EmailVerified {
+		t.Fatal("a created user's address must be verified")
+	}
+
 	// The user landed in the signup default group, with no groups sent.
 	var groups []struct {
 		ID string `json:"id"`

@@ -15,6 +15,7 @@ All notable changes to this project are documented here, in the
 
 ### Fixed
 
+- The account created at Pocket ID has its address marked verified. Pocket ID sent `email_verified` false for it, so the gate in front of a gated app refused the member's sign in with a server error.
 - The email acknowledging an application finishes its sentence: it says the applicant will get another email when an admin has approved it.
 
 ## [0.5.0] - 2026-10-16

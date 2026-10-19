@@ -166,11 +166,15 @@ func (c *Client) AdminGroupEmails(ctx context.Context, group string) ([]string, 
 	return out, nil
 }
 
-// CreateUser creates a user with an unverified address, the applicant's
-// names, and not an administrator.
+// CreateUser creates a user with the applicant's names, not an
+// administrator, and the address marked verified. A new account has no
+// passkey, so its first sign-in is the link emailed to that address: an ID
+// token for it is issued only to someone who holds the inbox. Pocket ID
+// stores emailVerified as sent, and the gate and Mbin refuse a token that
+// says false.
 func (c *Client) CreateUser(ctx context.Context, u idp.NewUser) (idp.User, error) {
 	email := strings.TrimSpace(u.Email)
-	out, err := c.api.CreateUser(ctx, pid.NewUser{Username: u.Username, Email: &email,
+	out, err := c.api.CreateUser(ctx, pid.NewUser{Username: u.Username, Email: &email, EmailVerified: true,
 		DisplayName: u.DisplayName, FirstName: u.FirstName, LastName: u.LastName})
 	if err != nil {
 		return idp.User{}, wrap(err)

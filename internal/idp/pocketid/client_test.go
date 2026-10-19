@@ -185,9 +185,10 @@ func TestCreateUserBody(t *testing.T) {
 	if got.Key != "KEY" {
 		t.Fatal("API key header missing")
 	}
-	// pocketid-go's NewUser always sends the admin flag, here false, and
-	// leaves out emailVerified, which Pocket ID then stores as false.
-	want := map[string]any{"username": "bob", "email": "b@x.org", "displayName": "Bob", "firstName": "Robert", "lastName": "Ross", "isAdmin": false}
+	// pocketid-go's NewUser always sends the admin flag, here false. The
+	// address goes as verified: Pocket ID stores emailVerified as sent, and
+	// left out it would be false in every ID token.
+	want := map[string]any{"username": "bob", "email": "b@x.org", "emailVerified": true, "displayName": "Bob", "firstName": "Robert", "lastName": "Ross", "isAdmin": false}
 	if !reflect.DeepEqual(got.Body, want) {
 		t.Fatalf("create body\n got %v\nwant %v", got.Body, want)
 	}

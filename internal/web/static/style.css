@@ -133,7 +133,8 @@ p { margin: 0 0 1rem; }
 .brand img { height: 2rem; width: auto; max-width: 8rem; }
 .brand-sep { width: 1px; height: 1.25rem; margin: 0 .75rem 0 .5rem; background: oklch(0.439 0 0); }
 .brand-name { font-family: 'Gloock', serif; font-size: 1.5rem; line-height: 2rem; }
-.who { color: var(--muted-foreground); font-size: .875rem; }
+.who { color: var(--muted-foreground); font-size: .875rem; display: flex; align-items: center; gap: .75rem; }
+.who form.inline { margin: 0; }
 @media (min-width: 48rem) { .topbar-inner { padding: 0 2.5rem; } }
 
 /* routes/settings/+layout.svelte */

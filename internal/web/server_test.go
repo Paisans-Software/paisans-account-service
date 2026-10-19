@@ -165,6 +165,57 @@ func TestMemberCannotSeeAdmin(t *testing.T) {
 	}
 }
 
+// A promotion or demotion takes effect on the next request, not the next
+// sign-in: the session's admin flag is the one it signed in with, and the
+// admin group is read afresh.
+func TestAdminGroupIsReadEachRequest(t *testing.T) {
+	h := newHarness(t, true)
+	h.fake.Groups["admins"] = append(h.fake.Groups["admins"], "alice")
+	if rec := h.as(member, "GET", "/admin", nil); rec.Code != 200 {
+		t.Fatalf("promoted: got %d", rec.Code)
+	}
+	if rec := h.as(member, "GET", "/", nil); !strings.Contains(rec.Body.String(), `href="/admin"`) {
+		t.Fatal("promoted: no admin links")
+	}
+	h.fake.Groups["admins"] = []string{"alice"}
+	if rec := h.as(admin, "GET", "/admin", nil); rec.Code != 403 {
+		t.Fatalf("demoted: got %d", rec.Code)
+	}
+	if rec := h.as(admin, "POST", "/admin/applications/1/approve", url.Values{"csrf": {"tok"}}); rec.Code != 403 {
+		t.Fatalf("demoted approve: got %d", rec.Code)
+	}
+	if rec := h.as(admin, "GET", "/", nil); strings.Contains(rec.Body.String(), `href="/admin"`) {
+		t.Fatal("demoted: admin links shown")
+	}
+}
+
+// An admin check that cannot reach the identity provider grants nothing.
+func TestAdminCheckFailsClosed(t *testing.T) {
+	h := newHarness(t, true)
+	h.fake.FailLookup = errors.New("down")
+	if rec := h.as(admin, "GET", "/admin", nil); rec.Code != 503 {
+		t.Fatalf("got %d", rec.Code)
+	}
+}
+
+func TestHomeOffersSignOut(t *testing.T) {
+	h := newHarness(t, true)
+	body := h.as(member, "GET", "/", nil).Body.String()
+	if !strings.Contains(body, `action="/auth/logout"`) || !strings.Contains(body, `name="csrf" value="tok"`) {
+		t.Fatal("no sign-out form")
+	}
+	rec := h.as(member, "POST", "/auth/logout", url.Values{"csrf": {"tok"}})
+	if rec.Code != 303 {
+		t.Fatalf("got %d", rec.Code)
+	}
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == "account_session" && c.MaxAge < 0 {
+			return
+		}
+	}
+	t.Fatal("session cookie not cleared")
+}
+
 func TestAdminApproves(t *testing.T) {
 	h := newHarness(t, true)
 	applyBob(t, h)
@@ -424,17 +475,18 @@ const hostile = `"><script>alert(1)</script>`
 func TestHostileValuesEscapedOnEveryPage(t *testing.T) {
 	h := newHarness(t, true)
 	evil := Session{Sub: "s-evil", Username: hostile, CSRF: "tok", Exp: time.Now().Add(time.Hour).Unix()}
+	h.fake.Users = append(h.fake.Users, idp.User{ID: evil.Sub, Username: hostile})
 	tok, _ := h.inviteAs(t, flow.Member{Sub: evil.Sub, Username: evil.Username})
 	inviteRec := h.get(joinHost, "/i/"+tok)
 	if _, err := h.flow.Apply(context.Background(), tok, flow.Applicant{Username: "bob", Email: "bob@x.org", DisplayName: hostile, FirstName: "Bob", Agreed: true}); err != nil {
 		t.Fatal(err)
 	}
-	evilAdmin := evil
-	evilAdmin.Admin = true
+	home := h.as(evil, "GET", "/", nil)
+	h.fake.Groups["admins"] = append(h.fake.Groups["admins"], hostile)
 	for name, rec := range map[string]*httptest.ResponseRecorder{
-		"home":   h.as(evil, "GET", "/", nil),
+		"home":   home,
 		"invite": inviteRec,
-		"admin":  h.as(evilAdmin, "GET", "/admin", nil),
+		"admin":  h.as(evil, "GET", "/admin", nil),
 	} {
 		body := rec.Body.String()
 		if rec.Code != 200 || strings.Contains(body, "<script>") || !strings.Contains(body, "&lt;script&gt;alert(1)&lt;/script&gt;") {

@@ -13,7 +13,7 @@ import (
 
 // sessionGroupsNotice is what a group change cannot do at once, said on the
 // page that makes it and the page that confirms it.
-const sessionGroupsNotice = "A change takes effect at their next sign-in: an app session they already have keeps the privileges it was given until it expires."
+const sessionGroupsNotice = "This service sees a change at once. Other apps see it at their next sign-in: an app session they already have keeps the privileges it was given until it expires."
 
 // unconfirmedGroups is a group change sent to Pocket ID whose result could
 // not be read back.

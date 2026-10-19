@@ -11,7 +11,7 @@ All notable changes to this project are documented here, in the
 
 ### Fixed
 
-- A promotion to the admin group or a demotion from it takes effect on the user's next request. The session kept the admin flag it signed in with for its eight hours, so a promoted admin got "Forbidden" at `/admin` and a demoted one kept admin rights here.
+- A change to the admin group takes effect on the user's next request. The session kept its sign-in's admin flag, so a promoted admin got "Forbidden" at `/admin` and a demoted one kept admin rights.
 
 ## [0.5.1] - 2026-10-19
 

@@ -5,6 +5,8 @@ All notable changes to this project are documented here, in the
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-10-19
+
 ### Added
 
 - The join form asks for a first name and an optional last name, at most 50 characters each, and the account created at Pocket ID gets them. An application made before this has neither.

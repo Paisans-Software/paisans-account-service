@@ -177,7 +177,7 @@ func TestEmailTaken(t *testing.T) {
 
 func TestCreateUserBody(t *testing.T) {
 	c, calls := fake(t, nil)
-	u, err := c.CreateUser(context.Background(), idp.NewUser{Username: "bob", Email: "b@x.org", DisplayName: "Bob"})
+	u, err := c.CreateUser(context.Background(), idp.NewUser{Username: "bob", Email: "b@x.org", DisplayName: "Bob", FirstName: "Robert", LastName: "Ross"})
 	if err != nil || u.ID != "new-id" {
 		t.Fatalf("%v %v", u, err)
 	}
@@ -185,10 +185,10 @@ func TestCreateUserBody(t *testing.T) {
 	if got.Key != "KEY" {
 		t.Fatal("API key header missing")
 	}
-	// pocketid-go's NewUser always sends the names and the admin flag, here
-	// empty and false, and leaves out emailVerified, which Pocket ID then
-	// stores as false.
-	want := map[string]any{"username": "bob", "email": "b@x.org", "displayName": "Bob", "firstName": "", "lastName": "", "isAdmin": false}
+	// pocketid-go's NewUser always sends the admin flag, here false. The
+	// address goes as verified: Pocket ID stores emailVerified as sent, and
+	// left out it would be false in every ID token.
+	want := map[string]any{"username": "bob", "email": "b@x.org", "emailVerified": true, "displayName": "Bob", "firstName": "Robert", "lastName": "Ross", "isAdmin": false}
 	if !reflect.DeepEqual(got.Body, want) {
 		t.Fatalf("create body\n got %v\nwant %v", got.Body, want)
 	}

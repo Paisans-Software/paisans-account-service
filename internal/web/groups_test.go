@@ -56,11 +56,11 @@ func TestGroupsPage(t *testing.T) {
 	if !strings.Contains(body, "Operators") || strings.Contains(body, `value="g-operators"`) {
 		t.Errorf("operators offered:\n%s", body)
 	}
-	if strings.Contains(body, "next apply") {
+	if strings.Contains(body, "next paisans deployment apply") {
 		t.Error("operator note on a member's page")
 	}
 	op := h.as(admin, "GET", "/admin/members/s-opal/groups", nil).Body.String()
-	if !strings.Contains(op, "next apply") || !regexp.MustCompile(`disabled checked`).MatchString(op) || strings.Contains(op, `value="g-operators"`) ||
+	if !strings.Contains(op, "next paisans deployment apply") || !regexp.MustCompile(`disabled checked`).MatchString(op) || strings.Contains(op, `value="g-operators"`) ||
 		!strings.Contains(op, "operators · set in the Paisan Stack deployment configuration") {
 		t.Fatalf("operator page:\n%s", op)
 	}

@@ -35,7 +35,7 @@ type GroupsPage struct {
 	Member MemberRow
 	Groups []GroupRow
 	// Operator is a user in the operators group or named in
-	// ACCOUNT_OPERATORS: the next apply restores their groups.
+	// ACCOUNT_OPERATORS: the next paisans deployment apply restores their groups.
 	Operator bool
 }
 

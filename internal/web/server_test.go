@@ -198,7 +198,7 @@ func applyBob(t *testing.T, h harness) {
 		t.Fatal(err)
 	}
 	tok := link[strings.LastIndex(link, "/")+1:]
-	if _, err := h.flow.Apply(context.Background(), tok, flow.Applicant{Username: "bob", Email: "bob@x.org", DisplayName: "Bob", Agreed: true}); err != nil {
+	if _, err := h.flow.Apply(context.Background(), tok, flow.Applicant{Username: "bob", Email: "bob@x.org", DisplayName: "Bob", FirstName: "Bob", Agreed: true}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -426,7 +426,7 @@ func TestHostileValuesEscapedOnEveryPage(t *testing.T) {
 	evil := Session{Sub: "s-evil", Username: hostile, CSRF: "tok", Exp: time.Now().Add(time.Hour).Unix()}
 	tok, _ := h.inviteAs(t, flow.Member{Sub: evil.Sub, Username: evil.Username})
 	inviteRec := h.get(joinHost, "/i/"+tok)
-	if _, err := h.flow.Apply(context.Background(), tok, flow.Applicant{Username: "bob", Email: "bob@x.org", DisplayName: hostile, Agreed: true}); err != nil {
+	if _, err := h.flow.Apply(context.Background(), tok, flow.Applicant{Username: "bob", Email: "bob@x.org", DisplayName: hostile, FirstName: "Bob", Agreed: true}); err != nil {
 		t.Fatal(err)
 	}
 	evilAdmin := evil

@@ -66,7 +66,7 @@ func token(t *testing.T, link string) string {
 }
 
 func bob() flow.Applicant {
-	return flow.Applicant{Username: "bob", Email: "bob@example.org", DisplayName: "Bob", Agreed: true}
+	return flow.Applicant{Username: "bob", Email: "bob@example.org", DisplayName: "Bob", FirstName: " Robert ", LastName: " Ross ", Agreed: true}
 }
 
 func TestApprovalFlow(t *testing.T) {
@@ -88,6 +88,9 @@ func TestApprovalFlow(t *testing.T) {
 	}
 	if f.Created != 1 || f.LinksSent != 1 {
 		t.Fatalf("created=%d links=%d", f.Created, f.LinksSent)
+	}
+	if u, _, _ := f.FindUser(ctx, "bob"); u.FirstName != "Robert" || u.LastName != "Ross" {
+		t.Fatalf("the account gets the applicant's trimmed names, got %q %q", u.FirstName, u.LastName)
 	}
 }
 
@@ -122,12 +125,15 @@ func TestApplyRefusals(t *testing.T) {
 		a    flow.Applicant
 		want error
 	}{
-		"not agreed":     {flow.Applicant{Username: "bob", Email: "b@x.org", DisplayName: "B"}, flow.ErrNotAgreed},
-		"bad username":   {flow.Applicant{Username: "-bob", Email: "b@x.org", DisplayName: "B", Agreed: true}, flow.ErrInvalidUsername},
-		"long username":  {flow.Applicant{Username: strings.Repeat("a", 51), Email: "b@x.org", DisplayName: "B", Agreed: true}, flow.ErrInvalidUsername},
-		"taken username": {flow.Applicant{Username: "taken", Email: "b@x.org", DisplayName: "B", Agreed: true}, flow.ErrUsernameTaken},
-		"bad email":      {flow.Applicant{Username: "bob", Email: "nope", DisplayName: "B", Agreed: true}, flow.ErrInvalidEmail},
-		"empty name":     {flow.Applicant{Username: "bob", Email: "b@x.org", DisplayName: " ", Agreed: true}, flow.ErrInvalidName},
+		"not agreed":     {flow.Applicant{Username: "bob", Email: "b@x.org", DisplayName: "B", FirstName: "Bob"}, flow.ErrNotAgreed},
+		"bad username":   {flow.Applicant{Username: "-bob", Email: "b@x.org", DisplayName: "B", FirstName: "Bob", Agreed: true}, flow.ErrInvalidUsername},
+		"long username":  {flow.Applicant{Username: strings.Repeat("a", 51), Email: "b@x.org", DisplayName: "B", FirstName: "Bob", Agreed: true}, flow.ErrInvalidUsername},
+		"taken username": {flow.Applicant{Username: "taken", Email: "b@x.org", DisplayName: "B", FirstName: "Bob", Agreed: true}, flow.ErrUsernameTaken},
+		"bad email":      {flow.Applicant{Username: "bob", Email: "nope", DisplayName: "B", FirstName: "Bob", Agreed: true}, flow.ErrInvalidEmail},
+		"empty name":     {flow.Applicant{Username: "bob", Email: "b@x.org", DisplayName: " ", FirstName: "Bob", Agreed: true}, flow.ErrInvalidName},
+		"no first name":  {flow.Applicant{Username: "bob", Email: "b@x.org", DisplayName: "B", FirstName: " ", Agreed: true}, flow.ErrInvalidFirst},
+		"long first":     {flow.Applicant{Username: "bob", Email: "b@x.org", DisplayName: "B", FirstName: strings.Repeat("é", 51), Agreed: true}, flow.ErrInvalidFirst},
+		"long last":      {flow.Applicant{Username: "bob", Email: "b@x.org", DisplayName: "B", FirstName: "Bob", LastName: strings.Repeat("é", 51), Agreed: true}, flow.ErrInvalidLast},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := s.Apply(ctx, tok, c.a); !errors.Is(err, c.want) {

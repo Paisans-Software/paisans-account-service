@@ -317,7 +317,7 @@ func TestWriteSurface(t *testing.T) {
 			}
 			switch fn.Name.Name {
 			case "CreateUser":
-				checkCreateUser(t, fn)
+				checkCreateUser(t, fn, info)
 			case "SendLoginLink":
 				checkSendLoginLink(t, fn, info)
 			case "SetDisabled", "SetEmail", "SetName":
@@ -541,9 +541,9 @@ func isSel(e ast.Expr, x, name string) bool {
 // checkCreateUser requires CreateUser to assign email once, from
 // strings.TrimSpace(u.Email), and to make one call,
 // c.api.CreateUser(ctx, pid.NewUser{Username: u.Username, Email: &email,
-// DisplayName: u.DisplayName}): no first or last name, no admin flag, and
-// the address unverified.
-func checkCreateUser(t *testing.T, fn *ast.FuncDecl) {
+// EmailVerified: true, DisplayName: u.DisplayName, FirstName: u.FirstName,
+// LastName: u.LastName}): no admin flag, and the address verified.
+func checkCreateUser(t *testing.T, fn *ast.FuncDecl, info *types.Info) {
 	t.Helper()
 	ctx, u := paramName(fn, 0), paramName(fn, 1)
 	calls := apiCalls(fn)
@@ -567,7 +567,7 @@ func checkCreateUser(t *testing.T, fn *ast.FuncDecl) {
 		keys[key] = true
 		good := false
 		switch key {
-		case "Username", "DisplayName":
+		case "Username", "DisplayName", "FirstName", "LastName":
 			good = isSel(kv.Value, u, key)
 		case "Email":
 			ue, ok := kv.Value.(*ast.UnaryExpr)
@@ -575,13 +575,16 @@ func checkCreateUser(t *testing.T, fn *ast.FuncDecl) {
 				id, ok := ue.X.(*ast.Ident)
 				good = ok && id.Name == "email"
 			}
+		case "EmailVerified":
+			id, ok := kv.Value.(*ast.Ident)
+			good = ok && info.Uses[id] == types.Universe.Lookup("true")
 		}
 		if !good {
 			t.Fatalf("NewUser.%s is set from something other than the approved source", key)
 		}
 	}
-	if len(keys) != 3 {
-		t.Fatalf("the NewUser literal must set Username, Email and DisplayName, sets %v", keys)
+	if len(keys) != 6 {
+		t.Fatalf("the NewUser literal must set Username, Email, EmailVerified, DisplayName, FirstName and LastName, sets %v", keys)
 	}
 	n := 0
 	ast.Inspect(fn, func(x ast.Node) bool {

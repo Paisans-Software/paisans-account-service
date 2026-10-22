@@ -449,7 +449,7 @@ func TestAdminDismissesUnsentLink(t *testing.T) {
 	h.as(admin, "POST", "/admin/applications/"+id+"/approve", url.Values{"csrf": {"tok"}})
 	body := h.as(admin, "GET", "/admin", nil).Body.String()
 	if !strings.Contains(body, `action="/admin/applications/`+id+`/dismiss"`) ||
-		!strings.Contains(body, "Dismissing stops tracking this application. If the account exists in Pocket ID, deal with it there.") {
+		!strings.Contains(body, "Dismissing stops tracking this request. If the account exists in Pocket ID, deal with it there.") {
 		t.Fatalf("no dismiss beside retry: %s", body)
 	}
 	if rec := h.as(member, "POST", "/admin/applications/"+id+"/dismiss", url.Values{"csrf": {"tok"}}); rec.Code != 403 {
@@ -530,7 +530,7 @@ func TestAdminOffersDismissForStaleApproval(t *testing.T) {
 		t.Fatal(err)
 	}
 	action := `action="/admin/applications/` + id + `/dismiss"`
-	note := "Dismissing stops tracking this application. If the account exists in Pocket ID, deal with it there."
+	note := "Dismissing stops tracking this request. If the account exists in Pocket ID, deal with it there."
 	if body := h.as(admin, "GET", "/admin", nil).Body.String(); strings.Contains(body, action) || strings.Contains(body, note) {
 		t.Fatalf("fresh claim offers dismiss: %s", body)
 	}

@@ -298,11 +298,11 @@ func (s *Service) submit(ctx context.Context, in Applicant, record func(store.Ne
 		// the admins can retry from the pending list.
 		slog.Warn("automatic approval failed; left for an admin", "application_id", app.ID, "error", err)
 	}
-	if err := s.m.Send(ctx, []string{app.Email}, "We received your application",
-		"Thank you for agreeing to the code of conduct. An admin will review your application, and you will get another email when they have approved it.\n"); err != nil {
+	if err := s.m.Send(ctx, []string{app.Email}, "We received your request to join",
+		"Thank you for agreeing to the code of conduct. An admin will review your request, and you will get another email when they have approved it.\n"); err != nil {
 		slog.Warn("could not acknowledge an application", "error", err)
 	}
-	s.notifyAdmins(ctx, "An application is waiting", "Someone has applied to join and is waiting for approval.\n\n"+s.s.AccountURL+"/admin\n")
+	s.notifyAdmins(ctx, "An invite request is waiting", "Someone has asked to join and is waiting for approval.\n\n"+s.s.AccountURL+"/admin\n")
 	return false, nil
 }
 
@@ -336,7 +336,7 @@ func (s *Service) banned(ctx context.Context, email string) (bool, error) {
 // tellRefused mails a refused signup's address the reason, which no page
 // shows.
 func (s *Service) tellRefused(ctx context.Context, email, reason string) {
-	subject, body := "About your application", "Your application to join can't be accepted.\n"
+	subject, body := "About your request to join", "Your request to join can't be accepted.\n"
 	if reason == refusedInUse {
 		subject = "You already have an account"
 		body = "Someone asked to join with this email address, which already has an account. If it was you, go to " +
@@ -518,10 +518,10 @@ func (s *Service) Decline(ctx context.Context, admin Member, id int64) error {
 	slog.Info("write", "action", "application.decline", "application_id", id)
 	subject := "About your invitation"
 	if app.InviterUsername == "" {
-		subject = "About your application"
+		subject = "About your request to join"
 	}
 	if err := s.m.Send(ctx, []string{app.Email}, subject,
-		"Thank you for your interest. Your application to join was not accepted.\n"); err != nil {
+		"Thank you for your interest. Your request to join was not accepted.\n"); err != nil {
 		slog.Warn("could not tell the applicant of a decline", "error", err)
 	}
 	if app.InviterUsername == "" {
@@ -532,7 +532,7 @@ func (s *Service) Decline(ctx context.Context, admin Member, id int64) error {
 		slog.Warn("could not look up the inviter of a declined application", "application_id", id, "error", err)
 	} else if found && inviter.Email != "" {
 		if err := s.m.Send(ctx, []string{inviter.Email}, "An invite you sent was declined",
-			"An application made with one of your invites was declined. Your invite slot is free again.\n"); err != nil {
+			"A request to join made with one of your invites was declined. Your invite slot is free again.\n"); err != nil {
 			slog.Warn("could not tell the inviter of a decline", "error", err)
 		}
 	}

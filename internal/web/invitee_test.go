@@ -74,8 +74,8 @@ func TestSubmitAndReuse(t *testing.T) {
 	tok, csrf := h.invite(t)
 	rec := post(h, "/i/"+tok, form(csrf))
 	body := rec.Body.String()
-	if rec.Code != 200 || !strings.Contains(body, "<h1>Thanks for applying</h1>") ||
-		!strings.Contains(body, "<p>An admin will review your application. Once you&#39;re approved, we&#39;ll email you a sign-in link.</p>") {
+	if rec.Code != 200 || !strings.Contains(body, "<h1>Thanks for asking to join</h1>") ||
+		!strings.Contains(body, "<p>An admin will review your request. Once you&#39;re approved, we&#39;ll email you a sign-in link.</p>") {
 		t.Fatalf("%d %s", rec.Code, body)
 	}
 	if strings.Contains(body, "Link expired") || strings.Contains(body, "<a ") {

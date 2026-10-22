@@ -42,7 +42,7 @@ func TestRegisterThroughTheJoinHost(t *testing.T) {
 		t.Fatal("no code of conduct")
 	}
 	rec := post(h, "/", f)
-	if rec.Code != 200 || !strings.Contains(rec.Body.String(), "<h1>Thanks for applying</h1>") {
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), "<h1>Thanks for asking to join</h1>") {
 		t.Fatalf("%d %s", rec.Code, rec.Body.String())
 	}
 	if body := h.as(admin, "GET", "/admin", nil).Body.String(); !strings.Contains(body, "registered") || strings.Contains(body, "invited by") {

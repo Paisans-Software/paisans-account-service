@@ -9,6 +9,10 @@ All notable changes to this project are documented here, in the
 
 - Every signed-in page has a Sign out button in its header. The sign-out route had no button, so signing out of Pocket ID left this service's own session in place.
 
+### Changed
+
+- The admin queue of people waiting to join is called Invite Requests, in the sidebar and on its page. The pages, errors and emails that mentioned an application call it a request to join, in both signup modes.
+
 ### Fixed
 
 - A change to the admin group takes effect on the user's next request. The session kept its sign-in's admin flag, so a promoted admin got "Forbidden" at `/admin` and a demoted one kept admin rights.

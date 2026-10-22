@@ -14,11 +14,11 @@ import (
 // Error text on the admin page is chosen by the server from a fixed code, so a
 // crafted link cannot put words in the banner.
 var decisionErrors = map[string]string{
-	"username_taken": "That username is now taken. Decline the application, or ask the person to apply again with another.",
+	"username_taken": "That username is now taken. Decline the request, or ask the person to ask again with another.",
 	"email_taken":    "An account already uses that email address.",
-	"not_found":      "That application no longer exists.",
-	"busy":           "Someone else is deciding this application; refresh in a moment.",
-	"banned":         "That address is banned. Decline the application.",
+	"not_found":      "That request no longer exists.",
+	"busy":           "Someone else is deciding this request; refresh in a moment.",
+	"banned":         "That address is banned. Decline the request.",
 	"forbidden":      "Only admins can do that.",
 	"failed":         "That did not work. The identity provider or database may be unavailable; try again.",
 }
@@ -48,7 +48,7 @@ func (s *server) queue(w http.ResponseWriter, r *http.Request, sess Session) {
 		s.fail(w, err)
 		return
 	}
-	v := view{Title: "Applications", Session: &sess, CSRF: sess.CSRF, Data: p, Error: decisionErrors[r.URL.Query().Get("error")]}
+	v := view{Title: "Invite Requests", Session: &sess, CSRF: sess.CSRF, Data: p, Error: decisionErrors[r.URL.Query().Get("error")]}
 	s.Render.page(w, 200, "admin.html", v)
 }
 

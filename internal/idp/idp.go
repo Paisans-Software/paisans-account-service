@@ -59,6 +59,10 @@ type Provider interface {
 	// AdminGroupEmails returns the email addresses of the members of the
 	// named group: the service's admins are that group, not the provider's.
 	AdminGroupEmails(ctx context.Context, group string) ([]string, error)
+	// GroupMembers returns every member of the named group, disabled ones
+	// and those without an address included. A group the provider does not
+	// have is an error.
+	GroupMembers(ctx context.Context, group string) ([]User, error)
 	CreateUser(ctx context.Context, u NewUser) (User, error)
 	SendLoginLink(ctx context.Context, userID string) error
 	// ListUsers returns every user.

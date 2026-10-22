@@ -280,6 +280,22 @@ func TestAdminGroupEmails(t *testing.T) {
 	if _, err := c.AdminGroupEmails(context.Background(), "nobody"); err == nil {
 		t.Fatal("a missing group must be an error")
 	}
+	members, err := c.GroupMembers(context.Background(), "admins")
+	var ids []string
+	for _, u := range members {
+		ids = append(ids, u.ID)
+	}
+	if err != nil || strings.Join(ids, ",") != "1,2,3" || !members[2].Disabled {
+		t.Fatalf("members: %+v %v", members, err)
+	}
+	if _, err := c.GroupMembers(context.Background(), "nobody"); err == nil {
+		t.Fatal("a missing group must be an error")
+	}
+	for _, cl := range *calls {
+		if cl.Method != "GET" {
+			t.Fatalf("a read made a %s", cl.Method)
+		}
+	}
 }
 
 func TestErrorsDoNotEchoBodies(t *testing.T) {
@@ -316,6 +332,8 @@ func TestTransportErrorsDoNotEchoQuery(t *testing.T) {
 	check(err)
 	_, err = c.AdminGroupEmails(context.Background(), "secret")
 	check(err)
+	_, err = c.GroupMembers(context.Background(), "secret")
+	check(err)
 }
 
 // Every exported method, answered with a redirect of any kind, fails with
@@ -344,6 +362,7 @@ func TestRedirectIsAnErrorAndNotFollowed(t *testing.T) {
 			{"EmailTaken", func() error { _, err := c.EmailTaken(ctx, "bob@x.org"); return err }},
 			{"FindUser", func() error { _, _, err := c.FindUser(ctx, "bob"); return err }},
 			{"AdminGroupEmails", func() error { _, err := c.AdminGroupEmails(ctx, "admins"); return err }},
+			{"GroupMembers", func() error { _, err := c.GroupMembers(ctx, "admins"); return err }},
 			{"ListUsers", func() error { _, err := c.ListUsers(ctx); return err }},
 			{"GetUser", func() error { _, err := c.GetUser(ctx, "u1"); return err }},
 			{"ListGroups", func() error { _, err := c.ListGroups(ctx); return err }},

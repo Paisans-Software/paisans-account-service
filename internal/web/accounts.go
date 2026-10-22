@@ -50,6 +50,7 @@ var done = map[string]string{
 	"lifted":    "The ban is lifted and the member can sign in again.",
 	"opened":    "The request is open. Another admin must approve it within 48 hours.",
 	"approved":  "The new address is set and Pocket ID has emailed a sign-in link to it.",
+	"recovered": "The account is recovered: the new address is set and Pocket ID has emailed a sign-in link to it.",
 	"cancelled": "The request is cancelled.",
 	"email":     "Your email address is changed.",
 	"name":      "Your name is changed.",
@@ -281,6 +282,9 @@ type recoveryData struct {
 	Rows                    []flow.RecoveryRow
 	Username, Email, Reason string
 	Sub                     string
+	// Immediate is a viewer who is the sole operator-admin: their recovery
+	// happens on submit, with no second admin.
+	Immediate bool
 }
 
 func (s *server) recoveryView(w http.ResponseWriter, r *http.Request, sess Session, status int, errText string, d recoveryData) {
@@ -290,6 +294,9 @@ func (s *server) recoveryView(w http.ResponseWriter, r *http.Request, sess Sessi
 		return
 	}
 	d.Rows, d.Sub = rows, sess.Sub
+	// A failed read shows the two-admin wording, which is what opening a
+	// request then does.
+	d.Immediate, _ = s.Flow.SoleOperatorAdmin(r.Context(), sess.member())
 	if errText == "" {
 		errText = errorCodes[r.URL.Query().Get("error")]
 	}
@@ -303,13 +310,17 @@ func (s *server) recoveryPage(w http.ResponseWriter, r *http.Request, sess Sessi
 
 func (s *server) recoveryOpen(w http.ResponseWriter, r *http.Request, sess Session) {
 	d := recoveryData{Username: r.PostFormValue("username"), Email: r.PostFormValue("email"), Reason: r.PostFormValue("reason")}
-	_, err := s.Flow.OpenRecovery(r.Context(), sess.member(), d.Username, d.Email, d.Reason)
+	rq, err := s.Flow.OpenRecovery(r.Context(), sess.member(), d.Username, d.Email, d.Reason)
 	if msg := userError(err); msg != "" {
 		s.recoveryView(w, r, sess, http.StatusUnprocessableEntity, msg, d)
 		return
 	}
 	if err != nil {
 		s.fail(w, err)
+		return
+	}
+	if rq.State == "approved" {
+		http.Redirect(w, r, "/admin/recovery?done=recovered", http.StatusSeeOther)
 		return
 	}
 	http.Redirect(w, r, "/admin/recovery?done=opened", http.StatusSeeOther)

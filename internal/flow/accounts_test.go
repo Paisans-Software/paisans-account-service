@@ -422,6 +422,115 @@ func TestRecoveryRechecksAtApproval(t *testing.T) {
 	}
 }
 
+var opalM = flow.Member{Sub: "o", Username: "opal", Admin: true}
+
+// soleOperator makes opal, an operator, the admin group's only member.
+func soleOperator(f *idptest.Fake) {
+	people(f)
+	f.Groups["admins"] = []string{"opal"}
+}
+
+// An operator who is the only admin recovers a member at once: there is no
+// second admin to approve it.
+func TestSoleOperatorRecoversAtOnce(t *testing.T) {
+	s, f, m, st := setupStore(t, true)
+	soleOperator(f)
+	if sole, err := s.SoleOperatorAdmin(ctx, opalM); err != nil || !sole {
+		t.Fatalf("%v %v", sole, err)
+	}
+	r, err := s.OpenRecovery(ctx, opalM, "bob", "fresh@x.org", "video call")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.State != "approved" || !r.SoleOperator || r.ApprovedBy != "opal" || r.ApprovedBySub != "o" {
+		t.Fatalf("%+v", r)
+	}
+	if f.User("b").Email != "fresh@x.org" || f.LinksSent != 1 || f.LinksTo[0] != "b" {
+		t.Fatalf("email %q links %v", f.User("b").Email, f.LinksTo)
+	}
+	if got, _ := st.Recovery(ctx, r.ID); got.State != "approved" || !got.SoleOperator || got.ApprovedBy != "opal" {
+		t.Fatalf("recorded %+v", got)
+	}
+	if got, _ := st.AuditSubjects(ctx, "recovery.approve_sole_operator"); len(got) != 1 {
+		t.Fatalf("audit: %v", got)
+	}
+	if n := m.To("opal@x.org"); len(n) != 0 {
+		t.Fatalf("the sole admin was asked for a second admin: %+v", n)
+	}
+	if rows, _ := s.Recoveries(ctx, opalM); len(rows) != 1 || rows[0].Live() {
+		t.Fatalf("%+v", rows)
+	}
+	// The guards still hold.
+	if _, err := s.OpenRecovery(ctx, opalM, "opal", "fresh@x.org", "call"); !errors.Is(err, flow.ErrOperator) {
+		t.Fatal(err)
+	}
+	if _, err := s.OpenRecovery(ctx, opalM, "ann", "opal@x.org", "call"); !errors.Is(err, flow.ErrAddressRefused) {
+		t.Fatalf("taken address: %v", err)
+	}
+	f.SetDisabled(ctx, "a", true)
+	if _, err := s.OpenRecovery(ctx, opalM, "ann", "new.ann@x.org", "call"); !errors.Is(err, flow.ErrMemberBanned) {
+		t.Fatal(err)
+	}
+}
+
+// A sole operator's recovery that fails changes nothing and leaves the
+// member free for another attempt.
+func TestSoleOperatorRecoveryFailureFreesTheMember(t *testing.T) {
+	s, f, _, st := setupStore(t, true)
+	soleOperator(f)
+	f.FailSendLink = errors.New("down")
+	if _, err := s.OpenRecovery(ctx, opalM, "bob", "fresh@x.org", "call"); err == nil {
+		t.Fatal("want the send's failure")
+	}
+	list, _ := st.Recoveries(ctx)
+	if len(list) != 1 || list[0].State != "cancelled" {
+		t.Fatalf("%+v", list)
+	}
+	f.FailSendLink = nil
+	if r, err := s.OpenRecovery(ctx, opalM, "bob", "fresh@x.org", "call"); err != nil || r.State != "approved" {
+		t.Fatalf("retry: %+v %v", r, err)
+	}
+}
+
+// Anyone but an operator who is the only admin opens a request for a second
+// admin, as does an operator when the admin group cannot be read.
+func TestRecoveryNeedsASecondAdminOtherwise(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		admin flow.Member
+		setup func(*idptest.Fake)
+		told  string
+	}{
+		{"operator with another admin", opalM, func(f *idptest.Fake) { people(f); f.Groups["admins"] = []string{"opal", "ann"} }, "ann@x.org"},
+		{"sole admin who is not an operator", ann, func(f *idptest.Fake) { people(f); f.Groups["admins"] = []string{"ann"} }, "ann@x.org"},
+		{"admin group unreadable", opalM, func(f *idptest.Fake) { soleOperator(f); f.FailGroupMembers = errors.New("down") }, "opal@x.org"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s, f, m, _ := setupStore(t, true)
+			c.setup(f)
+			if sole, _ := s.SoleOperatorAdmin(ctx, c.admin); sole {
+				t.Fatal("reads as the sole operator-admin")
+			}
+			r, err := s.OpenRecovery(ctx, c.admin, "bob", "fresh@x.org", "call")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if r.State != "open" || r.SoleOperator {
+				t.Fatalf("%+v", r)
+			}
+			if f.User("b").Email != "bob@x.org" || f.LinksSent != 0 {
+				t.Fatal("recovered without a second admin")
+			}
+			if n := m.To(c.told); len(n) != 1 || n[0].Subject != "A recovery needs a second admin" {
+				t.Fatalf("the admins were not told: %+v", n)
+			}
+			if err := s.ApproveRecovery(ctx, c.admin, r.ID); !errors.Is(err, store.ErrSameAdmin) {
+				t.Fatalf("the opener approving: %v", err)
+			}
+		})
+	}
+}
+
 // No log line carries a code or an address, whatever the outcome.
 func TestLogsCarryNoCodesOrAddresses(t *testing.T) {
 	var buf bytes.Buffer

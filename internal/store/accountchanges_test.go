@@ -236,3 +236,80 @@ func TestRecoveryStaleClaim(t *testing.T) {
 		t.Fatalf("stale claim: %v", err)
 	}
 }
+
+func openSoleOperatorRecovery(t *testing.T, s *store.Store, user string, now time.Time) store.Recovery {
+	t.Helper()
+	r, err := s.OpenSoleOperatorRecovery(ctx, store.Recovery{UserID: user, Username: user, NewEmail: user + "@new.org", Reason: "video call",
+		OpenedBySub: "s-opal", OpenedBy: "opal", OpenedAt: now, ExpiresAt: now.Add(48 * time.Hour)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+
+// A sole operator's request opens claimed by its opener, who completes it
+// alone; no other admin can claim it, and it is recorded as theirs alone.
+func TestSoleOperatorRecovery(t *testing.T) {
+	s := storetest.New(t)
+	now := time.Now()
+	r := openSoleOperatorRecovery(t, s, "u1", now)
+	if r.State != "approving" || !r.SoleOperator {
+		t.Fatalf("%+v", r)
+	}
+	if _, err := s.OpenRecovery(ctx, store.Recovery{UserID: "u1", Username: "u1", NewEmail: "x@y.org", Reason: "r",
+		OpenedBySub: "s-bo", OpenedBy: "bo", OpenedAt: now, ExpiresAt: now.Add(time.Hour)}); !errors.Is(err, store.ErrBusy) {
+		t.Fatalf("a second request while it runs: %v", err)
+	}
+	for _, at := range []time.Time{now, now.Add(11 * time.Minute)} {
+		if _, err := s.ClaimRecovery(ctx, r.ID, "s-bo", at); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("another admin claiming it at %v: %v", at, err)
+		}
+	}
+	if err := s.CancelRecovery(ctx, r.ID, "s-bo"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("cancel while it runs: %v", err)
+	}
+	if err := s.CompleteRecovery(ctx, r.ID, "s-opal", "opal"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.Recovery(ctx, r.ID); got.State != "approved" || got.ApprovedBy != "opal" || got.ApprovedBySub != "s-opal" || !got.SoleOperator {
+		t.Fatalf("%+v", got)
+	}
+	if err := s.AbandonSoleOperatorRecovery(ctx, r.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("abandoning a completed one: %v", err)
+	}
+
+	// A failed recovery is abandoned, freeing the member.
+	r2 := openSoleOperatorRecovery(t, s, "u1", now)
+	if err := s.AbandonSoleOperatorRecovery(ctx, r2.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.Recovery(ctx, r2.ID); got.State != "cancelled" {
+		t.Fatal(got.State)
+	}
+	// A normal request is never abandoned this way.
+	n := openRecovery(t, s, "u2", now)
+	if _, err := s.ClaimRecovery(ctx, n.ID, "s-bo", now); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AbandonSoleOperatorRecovery(ctx, n.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("abandoning a normal request: %v", err)
+	}
+	for action, n := range map[string]int{"recovery.open_sole_operator": 2, "recovery.approve_sole_operator": 1, "recovery.approve": 0, "recovery.cancel": 1} {
+		if got, _ := s.AuditSubjects(ctx, action); len(got) != n {
+			t.Errorf("%s: %v", action, got)
+		}
+	}
+
+	// One left claimed by a crash expires once the claim is stale.
+	r3 := openSoleOperatorRecovery(t, s, "u3", now)
+	if sw, err := s.Sweep(ctx, now.Add(5*time.Minute), 14*24*time.Hour, 183*24*time.Hour); err != nil || sw.RecoveriesExpired != 0 {
+		t.Fatalf("sweep with a fresh claim: %+v %v", sw, err)
+	}
+	if sw, err := s.Sweep(ctx, now.Add(11*time.Minute), 14*24*time.Hour, 183*24*time.Hour); err != nil || sw.RecoveriesExpired != 1 {
+		t.Fatalf("sweep with a stale claim: %+v %v", sw, err)
+	}
+	if got, _ := s.Recovery(ctx, r3.ID); got.State != "expired" {
+		t.Fatal(got.State)
+	}
+	openSoleOperatorRecovery(t, s, "u3", now.Add(12*time.Minute))
+}

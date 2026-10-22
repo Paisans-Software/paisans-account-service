@@ -166,7 +166,7 @@ func TestWriteSurface(t *testing.T) {
 		t.Fatalf("type-checking the package: %v", err)
 	}
 
-	exported := map[string]bool{"UsernameTaken": true, "EmailTaken": true, "FindUser": true, "AdminGroupEmails": true, "CreateUser": true, "SendLoginLink": true,
+	exported := map[string]bool{"UsernameTaken": true, "EmailTaken": true, "FindUser": true, "AdminGroupEmails": true, "GroupMembers": true, "CreateUser": true, "SendLoginLink": true,
 		"ListUsers": true, "GetUser": true, "SetDisabled": true, "SetEmail": true, "SetName": true,
 		"ListGroups": true, "UserGroups": true, "ChangeGroups": true}
 	httpWrites := map[string]int{}
@@ -1145,6 +1145,7 @@ func TestWriteSurfaceOnTheWire(t *testing.T) {
 		{"EmailTaken", users, func() error { _, err := c.EmailTaken(ctx, "bob@x.org"); return err }},
 		{"FindUser", users, func() error { _, _, err := c.FindUser(ctx, "bob"); return err }},
 		{"AdminGroupEmails", groups + ";" + users, func() error { _, err := c.AdminGroupEmails(ctx, "admins"); return err }},
+		{"GroupMembers", groups + ";" + users, func() error { _, err := c.GroupMembers(ctx, "admins"); return err }},
 		{"ListUsers", users, func() error { _, err := c.ListUsers(ctx); return err }},
 		{"GetUser", user1, func() error { _, err := c.GetUser(ctx, "u1"); return err }},
 		{"ListGroups", groups, func() error { _, err := c.ListGroups(ctx); return err }},

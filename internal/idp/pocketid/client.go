@@ -146,6 +146,35 @@ func (c *Client) EmailTaken(ctx context.Context, email string) (bool, error) {
 // group whose name (the value in the groups claim) is exactly group:
 // FindGroup compares exactly, and every user is listed with their groups.
 func (c *Client) AdminGroupEmails(ctx context.Context, group string) ([]string, error) {
+	us, err := c.groupUsers(ctx, group)
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, u := range us {
+		if deref(u.Email) != "" && !u.Disabled {
+			out = append(out, *u.Email)
+		}
+	}
+	return out, nil
+}
+
+// GroupMembers returns every member of the group named exactly group,
+// disabled ones and those without an address included.
+func (c *Client) GroupMembers(ctx context.Context, group string) ([]idp.User, error) {
+	us, err := c.groupUsers(ctx, group)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]idp.User, 0, len(us))
+	for _, u := range us {
+		out = append(out, toUser(u))
+	}
+	return out, nil
+}
+
+// groupUsers returns the users in the group named exactly group.
+func (c *Client) groupUsers(ctx context.Context, group string) ([]pid.User, error) {
 	g, err := c.api.FindGroup(ctx, group)
 	if err != nil {
 		return nil, wrap(err)
@@ -157,10 +186,10 @@ func (c *Client) AdminGroupEmails(ctx context.Context, group string) ([]string, 
 	if err != nil {
 		return nil, wrap(err)
 	}
-	var out []string
+	var out []pid.User
 	for _, u := range us {
-		if u.InGroup(g.ID) && deref(u.Email) != "" && !u.Disabled {
-			out = append(out, *u.Email)
+		if u.InGroup(g.ID) {
+			out = append(out, u)
 		}
 	}
 	return out, nil

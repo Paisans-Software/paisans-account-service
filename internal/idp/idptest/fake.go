@@ -24,6 +24,8 @@ type Fake struct {
 	FailLookup error
 	// FailGetUser makes GetUser alone fail.
 	FailGetUser error
+	// FailGroupMembers makes GroupMembers alone fail.
+	FailGroupMembers error
 	// FailUpdate makes every update fail.
 	FailUpdate error
 	// LinksTo lists the user IDs each sign-in link was sent to, in order.
@@ -96,6 +98,30 @@ func (f *Fake) AdminGroupEmails(_ context.Context, group string) ([]string, erro
 		for _, u := range f.Users {
 			if u.Username == name && u.Email != "" {
 				out = append(out, u.Email)
+			}
+		}
+	}
+	return out, nil
+}
+
+func (f *Fake) GroupMembers(_ context.Context, group string) ([]idp.User, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.FailLookup != nil {
+		return nil, f.FailLookup
+	}
+	if f.FailGroupMembers != nil {
+		return nil, f.FailGroupMembers
+	}
+	members, ok := f.Groups[group]
+	if !ok {
+		return nil, fmt.Errorf("identity provider: no group named %q", group)
+	}
+	out := []idp.User{}
+	for _, name := range members {
+		for _, u := range f.Users {
+			if u.Username == name {
+				out = append(out, u)
 			}
 		}
 	}

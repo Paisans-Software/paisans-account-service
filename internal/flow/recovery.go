@@ -30,7 +30,8 @@ func (r RecoveryRow) Live() bool { return r.State == "open" && !r.Expired }
 
 // OpenRecovery opens a request to give a member who has lost both their
 // passkey and their address a new address and a sign-in link. A different
-// admin approves it.
+// admin approves it, unless the opener is the sole operator-admin
+// (SoleOperatorAdmin): theirs is recovered at once and returned approved.
 func (s *Service) OpenRecovery(ctx context.Context, admin Member, username, email, why string) (store.Recovery, error) {
 	if !admin.Admin {
 		return store.Recovery{}, ErrForbidden
@@ -54,14 +55,62 @@ func (s *Service) OpenRecovery(ctx context.Context, admin Member, username, emai
 		return store.Recovery{}, err
 	}
 	now := s.now()
-	r, err := s.st.OpenRecovery(ctx, store.Recovery{UserID: u.ID, Username: u.Username, NewEmail: email, Reason: why,
-		OpenedBySub: admin.Sub, OpenedBy: admin.Username, OpenedAt: now, ExpiresAt: now.Add(RecoveryLifetime)})
+	req := store.Recovery{UserID: u.ID, Username: u.Username, NewEmail: email, Reason: why,
+		OpenedBySub: admin.Sub, OpenedBy: admin.Username, OpenedAt: now, ExpiresAt: now.Add(RecoveryLifetime)}
+	sole, err := s.SoleOperatorAdmin(ctx, admin)
+	if err != nil {
+		// Unsure there is no other admin, open the request for one: it
+		// waits, and the opener can cancel it.
+		slog.Warn("could not read the admin group; opening a request for a second admin", "error", err)
+	}
+	if sole {
+		return s.recoverAlone(ctx, admin, req)
+	}
+	r, err := s.st.OpenRecovery(ctx, req)
 	if err != nil {
 		return store.Recovery{}, err
 	}
 	slog.Info("write", "action", "recovery.open", "recovery_id", r.ID, "user_id", u.ID)
 	s.notifyAdmins(ctx, "A recovery needs a second admin",
 		"An admin has asked to recover a member's account. Another admin must approve it within 48 hours.\n\n"+s.s.AccountURL+"/admin/recovery\n")
+	return r, nil
+}
+
+// SoleOperatorAdmin reports whether admin is an operator and, at the provider
+// now, the admin group's only member. Such an admin recovers a member without
+// a second admin's approval: an operator holds the host and the provider's
+// API key, so a second admin would protect nothing.
+func (s *Service) SoleOperatorAdmin(ctx context.Context, admin Member) (bool, error) {
+	if !admin.Admin || !s.IsOperator(admin.Username) {
+		return false, nil
+	}
+	members, err := s.p.GroupMembers(ctx, s.s.AdminGroup)
+	if err != nil {
+		return false, err
+	}
+	return len(members) == 1 && members[0].ID == admin.Sub, nil
+}
+
+// recoverAlone is the sole operator-admin's recovery: the request is opened
+// already claimed by its opener and completed by them, recorded as theirs
+// alone. One that fails is abandoned, freeing the member.
+func (s *Service) recoverAlone(ctx context.Context, admin Member, req store.Recovery) (store.Recovery, error) {
+	r, err := s.st.OpenSoleOperatorRecovery(ctx, req)
+	if err != nil {
+		return store.Recovery{}, err
+	}
+	slog.Info("write", "action", "recovery.open_sole_operator", "recovery_id", r.ID, "user_id", r.UserID)
+	if err := s.recover(ctx, admin, r); err != nil {
+		if aerr := s.st.AbandonSoleOperatorRecovery(context.WithoutCancel(ctx), r.ID); aerr != nil {
+			slog.Warn("could not abandon a recovery", "recovery_id", r.ID, "error", aerr)
+		}
+		return store.Recovery{}, err
+	}
+	if err := s.st.CompleteRecovery(context.WithoutCancel(ctx), r.ID, admin.Sub, admin.Username); err != nil {
+		return store.Recovery{}, fmt.Errorf("the sign-in link was sent but the recovery was not recorded: %w", err)
+	}
+	slog.Info("write", "action", "recovery.approve_sole_operator", "recovery_id", r.ID, "user_id", r.UserID)
+	r.State, r.ApprovedBySub, r.ApprovedBy = "approved", admin.Sub, admin.Username
 	return r, nil
 }
 

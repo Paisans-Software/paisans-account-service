@@ -268,6 +268,37 @@ func TestRecoveryThroughThePages(t *testing.T) {
 	}
 }
 
+// An operator who is the only admin is told the recovery happens on submit,
+// and it does; anyone else sees the two-admin wording.
+func TestSoleOperatorRecoveryThroughThePages(t *testing.T) {
+	h := newHarness(t, true)
+	h.fake.Groups["admins"] = []string{"opal"}
+	const now = "the recovery happens as soon as you submit"
+	if body := h.as(opal, "GET", "/admin/recovery", nil).Body.String(); !strings.Contains(body, now) || strings.Contains(body, "Another admin must approve") {
+		t.Fatalf("sole operator-admin page: %s", body)
+	}
+	rec := h.as(opal, "POST", "/admin/recovery", url.Values{"csrf": {"tok"}, "username": {"alice"}, "email": {"fresh@x.org"}, "reason": {"video call"}})
+	if rec.Header().Get("Location") != "/admin/recovery?done=recovered" || h.fake.User("s-alice").Email != "fresh@x.org" || h.fake.LinksSent != 1 {
+		t.Fatalf("%d %s", rec.Code, rec.Header().Get("Location"))
+	}
+	if len(h.mail.To("opal@x.org")) != 0 {
+		t.Fatal("the sole admin was asked for a second admin")
+	}
+	body := h.as(opal, "GET", "/admin/recovery?done=recovered", nil).Body.String()
+	if !strings.Contains(body, "The account is recovered") || !strings.Contains(body, "recovered by opal alone, as the sole operator-admin") {
+		t.Fatalf("after: %s", body)
+	}
+
+	h.fake.Groups["admins"] = []string{"opal", "root"}
+	if body := h.as(opal, "GET", "/admin/recovery", nil).Body.String(); strings.Contains(body, now) || !strings.Contains(body, "Another admin must approve") {
+		t.Fatalf("operator with another admin: %s", body)
+	}
+	h.fake.Groups["admins"] = []string{"root"}
+	if body := h.as(admin, "GET", "/admin/recovery", nil).Body.String(); strings.Contains(body, now) {
+		t.Fatalf("sole admin who is not an operator: %s", body)
+	}
+}
+
 // Code entry is limited per client address, beyond the attempts each change
 // allows.
 func TestCodeEntryIsRateLimited(t *testing.T) {

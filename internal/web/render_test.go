@@ -120,15 +120,21 @@ func TestEveryPageExecutes(t *testing.T) {
 		Declines                                                 declines
 		Stale                                                    bool
 	}
+	type invitee struct {
+		Username, DisplayName string
+		Gone, Unavailable     bool
+	}
 	type invite struct {
 		ID, State string
 		CreatedAt time.Time
+		Invitee   *invitee
 	}
 	sess := &Session{Sub: "u1", Username: "alice", Admin: true, CSRF: "tok"}
 	pages := map[string]any{
 		"home.html": map[string]any{
 			"InvitesOn": true, "Remaining": "2 invites left", "NewLink": "https://x.example/join/abc", "Expires": "1 Nov",
-			"Invites": []invite{{"i1", "open", now}, {"i2", "used", now}},
+			"Invites": []invite{{"i1", "open", now, nil}, {"i2", "used", now, &invitee{Username: "bob", DisplayName: "Bob"}},
+				{"i3", "used", now, &invitee{Gone: true}}, {"i4", "used", now, &invitee{Unavailable: true}}},
 		},
 		"admin.html": []application{
 			{"a1", "Bob", "bob", "b@example.org", "alice", "pending", now, declines{2, now}, false},

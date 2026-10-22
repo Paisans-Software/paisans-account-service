@@ -22,6 +22,8 @@ type Fake struct {
 	FailCreate, FailSendLink error
 	// FailLookup makes every read fail, as an unreachable provider would.
 	FailLookup error
+	// FailGetUser makes GetUser alone fail.
+	FailGetUser error
 	// FailUpdate makes every update fail.
 	FailUpdate error
 	// LinksTo lists the user IDs each sign-in link was sent to, in order.
@@ -154,6 +156,9 @@ func (f *Fake) GetUser(_ context.Context, id string) (idp.User, error) {
 	defer f.mu.Unlock()
 	if f.FailLookup != nil {
 		return idp.User{}, f.FailLookup
+	}
+	if f.FailGetUser != nil {
+		return idp.User{}, f.FailGetUser
 	}
 	for _, u := range f.Users {
 		if u.ID == id {

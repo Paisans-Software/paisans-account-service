@@ -168,8 +168,47 @@ func (s *Service) CreateInvite(ctx context.Context, m Member, nonce string) (str
 	return s.s.JoinURL + "/i/" + tok, inv, nil
 }
 
-func (s *Service) Invites(ctx context.Context, m Member) ([]store.Invite, error) {
-	return s.st.ListInvites(ctx, m.Sub)
+// Invite is one of a member's invites. Invitee is the account a used invite
+// made, or nil for an invite not used, or used before the service recorded it.
+type Invite struct {
+	store.Invite
+	Invitee *Invitee
+}
+
+// Invitee is the account an invite made, as the provider has it now. Gone is
+// an account the provider no longer has; Unavailable is one it could not be
+// asked about. Either way the names are empty.
+type Invitee struct {
+	Username, DisplayName string
+	Gone, Unavailable     bool
+}
+
+// Invites returns the member's invites, each used one with its invitee read
+// from the provider. A lookup that fails marks that invitee Unavailable and
+// fails nothing else.
+func (s *Service) Invites(ctx context.Context, m Member) ([]Invite, error) {
+	invites, err := s.st.ListInvites(ctx, m.Sub)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Invite, len(invites))
+	for n, i := range invites {
+		out[n] = Invite{Invite: i}
+		if i.InviteeSub == "" {
+			continue
+		}
+		u, err := s.p.GetUser(ctx, i.InviteeSub)
+		switch {
+		case errors.Is(err, idp.ErrNotFound):
+			out[n].Invitee = &Invitee{Gone: true}
+		case err != nil:
+			slog.Warn("could not look up an invitee", "invite_id", i.ID, "error", err)
+			out[n].Invitee = &Invitee{Unavailable: true}
+		default:
+			out[n].Invitee = &Invitee{Username: u.Username, DisplayName: u.DisplayName}
+		}
+	}
+	return out, nil
 }
 
 func (s *Service) Revoke(ctx context.Context, m Member, id int64) error {

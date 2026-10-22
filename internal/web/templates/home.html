@@ -8,8 +8,8 @@
 </div>
 <div class="card">
   <h2>Your invites</h2>
-  {{if .Data.Invites}}<table><tr><th>Made</th><th>State</th><th></th></tr>
-  {{range .Data.Invites}}<tr><td>{{.CreatedAt.Format "2 Jan 2006"}}</td><td>{{.State}}</td>
+  {{if .Data.Invites}}<table><tr><th>Made</th><th>State</th><th>Invitee</th><th></th></tr>
+  {{range .Data.Invites}}<tr><td>{{.CreatedAt.Format "2 Jan 2006"}}</td><td>{{.State}}</td><td>{{with .Invitee}}{{if .Gone}}<span class="muted">Account deleted</span>{{else if .Unavailable}}<span class="muted">Can't be looked up right now</span>{{else}}{{with .DisplayName}}{{.}}<br>{{end}}<span class="muted">{{.Username}}</span>{{end}}{{end}}</td>
   <td>{{if eq .State "open"}}<form class="inline" method="post" action="/invites/{{.ID}}/revoke"><input type="hidden" name="csrf" value="{{$.CSRF}}"><button class="secondary">Revoke</button></form>{{end}}</td></tr>{{end}}
   </table>{{else}}<p class="muted">You have not made any invites yet.</p>{{end}}
 </div>

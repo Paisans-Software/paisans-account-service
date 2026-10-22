@@ -7,6 +7,7 @@ All notable changes to this project are documented here, in the
 
 ### Added
 
+- `/admin/members` lists every member, 50 to a page, and the search narrows that list. Each column (name, username, email, and status: active, disabled or banned) sorts it from its header, again to reverse it.
 - Every signed-in page has a Sign out button in its header. The sign-out route had no button, so signing out of Pocket ID left this service's own session in place.
 
 ### Changed

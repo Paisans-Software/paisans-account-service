@@ -15,7 +15,7 @@ import (
 type homeData struct {
 	// InvitesOn shows the invite cards, which open signup has none of.
 	InvitesOn        bool
-	Invites          []store.Invite
+	Invites          []flow.Invite
 	NewLink, Expires string
 	Remaining        string
 	// Nonce is the create form's one-time value, fresh on every render.

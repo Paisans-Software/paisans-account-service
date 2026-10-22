@@ -613,3 +613,39 @@ func TestLinksUseTheirOwnHost(t *testing.T) {
 		t.Fatalf("admin notice %+v", notice)
 	}
 }
+
+// A used invite shows who it made as the provider has them now; an applied
+// one shows nobody, and a provider that cannot answer fails no invite list.
+func TestInvitesNameTheInvitee(t *testing.T) {
+	s, f, _ := setup(t, true)
+	link, _, _ := s.CreateInvite(ctx, alice, flow.NewNonce())
+	if _, err := s.Apply(ctx, token(t, link), bob()); err != nil {
+		t.Fatal(err)
+	}
+	inv, err := s.Invites(ctx, alice)
+	if err != nil || len(inv) != 1 || inv[0].State != "applied" || inv[0].Invitee != nil {
+		t.Fatalf("an applied invite names nobody: %+v %v", inv, err)
+	}
+	p, _ := s.Pending(ctx)
+	if err := s.Approve(ctx, root, p[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.SetName(ctx, "id-1", idp.Name{DisplayName: "Bobby"}); err != nil {
+		t.Fatal(err)
+	}
+	inv, err = s.Invites(ctx, alice)
+	if err != nil || inv[0].State != "used" || inv[0].Invitee == nil || *inv[0].Invitee != (flow.Invitee{Username: "bob", DisplayName: "Bobby"}) {
+		t.Fatalf("used invite: %+v %v", inv, err)
+	}
+	f.FailLookup = errors.New("pocket id down")
+	inv, err = s.Invites(ctx, alice)
+	if err != nil || inv[0].Invitee == nil || *inv[0].Invitee != (flow.Invitee{Unavailable: true}) {
+		t.Fatalf("provider down: %+v %v", inv, err)
+	}
+	f.FailLookup = nil
+	f.Users = f.Users[:1]
+	inv, err = s.Invites(ctx, alice)
+	if err != nil || inv[0].Invitee == nil || *inv[0].Invitee != (flow.Invitee{Gone: true}) {
+		t.Fatalf("deleted account: %+v %v", inv, err)
+	}
+}

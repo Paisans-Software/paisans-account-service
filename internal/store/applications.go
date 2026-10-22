@@ -235,21 +235,23 @@ func (s *Store) MarkLinkUnsent(ctx context.Context, id int64, claim, idpUserID, 
 }
 
 // CompleteApplication finishes an application whose sign-in link was sent by
-// the holder of claim.
+// the holder of claim. Its invite is marked used and records the account it
+// made.
 func (s *Store) CompleteApplication(ctx context.Context, id int64, claim, adminSub string) error {
 	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
 		var inviteID *int64
 		var username string
+		var idpUserID *string
 		err := tx.QueryRow(ctx, `DELETE FROM applications
 			WHERE id=$1 AND state IN ('approving','link_unsent') AND claim_token=$2
-			RETURNING invite_id, username`, id, claim).Scan(&inviteID, &username)
+			RETURNING invite_id, username, idp_user_id`, id, claim).Scan(&inviteID, &username, &idpUserID)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return claimLost(ctx, tx, id)
 		}
 		if err != nil {
 			return err
 		}
-		if _, err := tx.Exec(ctx, `UPDATE invites SET state='used' WHERE id=$1`, inviteID); err != nil {
+		if _, err := tx.Exec(ctx, `UPDATE invites SET state='used', invitee_sub=$2 WHERE id=$1`, inviteID, idpUserID); err != nil {
 			return err
 		}
 		if _, err := tx.Exec(ctx, `INSERT INTO introductions (username, inviter_sub, inviter_username)

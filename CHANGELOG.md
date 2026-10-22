@@ -8,6 +8,7 @@ All notable changes to this project are documented here, in the
 ### Added
 
 - Every signed-in page has a Sign out button in its header. The sign-out route had no button, so signing out of Pocket ID left this service's own session in place.
+- The home page's invites list names who each used invite made: their display name and username as Pocket ID has them now, or "Account deleted" if Pocket ID no longer has them. An invite used before this, or not yet used, names nobody.
 
 ### Fixed
 

@@ -558,3 +558,42 @@ func TestConcurrentRetryShowsBusy(t *testing.T) {
 		t.Fatalf("first %s, second %s, links %d", first.Header().Get("Location"), second.Header().Get("Location"), h.fake.LinksSent)
 	}
 }
+
+// The home page names who a used invite made, as Pocket ID has them now,
+// escaped; an applied invite names nobody, and an account deleted or not to
+// be looked up says so without failing the page.
+func TestHomeNamesTheInvitee(t *testing.T) {
+	h := newHarness(t, true)
+	link, _, err := h.flow.CreateInvite(context.Background(), flow.Member{Sub: "s-alice", Username: "alice"}, flow.NewNonce())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tok := link[strings.LastIndex(link, "/")+1:]
+	if _, err := h.flow.Apply(context.Background(), tok, flow.Applicant{Username: "bob", Email: "bob@x.org", DisplayName: hostile, FirstName: "Bob", Agreed: true}); err != nil {
+		t.Fatal(err)
+	}
+	if body := h.as(member, "GET", "/", nil).Body.String(); strings.Contains(body, "bob") || !strings.Contains(body, "<td>applied</td>") {
+		t.Fatalf("an applied invite names its applicant: %s", body)
+	}
+	p, _ := h.flow.Pending(context.Background())
+	if err := h.flow.Approve(context.Background(), flow.Member{Sub: "s-root", Username: "root", Admin: true}, p[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	rec := h.as(member, "GET", "/", nil)
+	body := rec.Body.String()
+	if rec.Code != 200 || strings.Contains(body, "<script>") ||
+		!strings.Contains(body, `<td>used</td><td>&#34;&gt;&lt;script&gt;alert(1)&lt;/script&gt;<br><span class="muted">bob</span></td>`) {
+		t.Fatalf("used invite: %d %s", rec.Code, body)
+	}
+	h.fake.FailGetUser = errors.New("pocket id down")
+	rec = h.as(member, "GET", "/", nil)
+	if body := rec.Body.String(); rec.Code != 200 || !strings.Contains(body, `<td>used</td><td><span class="muted">Can't be looked up right now</span></td>`) {
+		t.Fatalf("lookup failed: %d %s", rec.Code, body)
+	}
+	h.fake.FailGetUser = nil
+	h.fake.Users = h.fake.Users[:3]
+	rec = h.as(member, "GET", "/", nil)
+	if body := rec.Body.String(); rec.Code != 200 || !strings.Contains(body, `<td>used</td><td><span class="muted">Account deleted</span></td>`) {
+		t.Fatalf("deleted account: %d %s", rec.Code, body)
+	}
+}

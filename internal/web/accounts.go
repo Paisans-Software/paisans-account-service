@@ -4,6 +4,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strconv"
 
 	"github.com/paisans-software/paisans-account-service/internal/flow"
@@ -61,19 +62,106 @@ func (s *server) id(r *http.Request) (int64, bool) {
 
 // --- members and bans ---
 
-type membersData struct {
-	Query string
-	Rows  []flow.MemberRow
+// membersData is one page of the members list, with the links that sort and
+// page it built from the query as applied, so a link never carries a value
+// the flow refused.
+type membersData struct{ flow.MembersPage }
+
+// link is the members list with q, sorted by column, desc and at page, each
+// left out when it is the default.
+func (d membersData) link(column string, desc bool, page int) string {
+	v := url.Values{}
+	if d.Q != "" {
+		v.Set("q", d.Q)
+	}
+	if column != flow.SortName {
+		v.Set("sort", column)
+	}
+	if desc {
+		v.Set("dir", "desc")
+	}
+	if page > 1 {
+		v.Set("page", strconv.Itoa(page))
+	}
+	if len(v) == 0 {
+		return "/admin/members"
+	}
+	return "/admin/members?" + v.Encode()
 }
 
+// SortLink sorts by column from the first page: ascending, or reversed if it
+// is the column already sorted ascending.
+func (d membersData) SortLink(column string) string {
+	return d.link(column, column == d.Sort && !d.Desc, 1)
+}
+
+// AriaSort is column's aria-sort value.
+func (d membersData) AriaSort(column string) string {
+	switch {
+	case column != d.Sort:
+		return "none"
+	case d.Desc:
+		return "descending"
+	}
+	return "ascending"
+}
+
+// Arrow marks the sorted column's header with its direction.
+func (d membersData) Arrow(column string) string {
+	switch {
+	case column != d.Sort:
+		return ""
+	case d.Desc:
+		return " ↓"
+	}
+	return " ↑"
+}
+
+// PrevLink and NextLink are the neighbouring pages, or "" at either end.
+func (d membersData) PrevLink() string {
+	if d.Page <= 1 {
+		return ""
+	}
+	return d.link(d.Sort, d.Desc, d.Page-1)
+}
+
+func (d membersData) NextLink() string {
+	if d.Page >= d.Pages {
+		return ""
+	}
+	return d.link(d.Sort, d.Desc, d.Page+1)
+}
+
+// Count says how many members the list holds, or how many match a search.
+func (d membersData) Count() string {
+	n := strconv.Itoa(d.Total)
+	switch {
+	case d.Q == "" && d.Total == 1:
+		return "1 member"
+	case d.Q == "":
+		return n + " members"
+	case d.Total == 1:
+		return "1 member matches"
+	}
+	return n + " members match"
+}
+
+// members lists every user, or those matching q, sorted by sort and dir and
+// cut to page. An unknown sort or a page that is not a number is the
+// default; the flow clamps the rest.
 func (s *server) members(w http.ResponseWriter, r *http.Request, sess Session) {
-	q := r.URL.Query().Get("q")
-	rows, err := s.Flow.SearchMembers(r.Context(), sess.member(), q)
+	v := r.URL.Query()
+	page, err := strconv.Atoi(v.Get("page"))
+	if err != nil {
+		page = 1
+	}
+	p, err := s.Flow.Members(r.Context(), sess.member(), flow.MembersQuery{
+		Q: v.Get("q"), Sort: v.Get("sort"), Desc: v.Get("dir") == "desc", Page: page})
 	if err != nil {
 		s.fail(w, err)
 		return
 	}
-	s.Render.page(w, 200, "members.html", view{Title: "Members", Session: &sess, CSRF: sess.CSRF, Data: membersData{Query: q, Rows: rows}})
+	s.Render.page(w, 200, "members.html", view{Title: "Members", Session: &sess, CSRF: sess.CSRF, Data: membersData{p}})
 }
 
 type banData struct {

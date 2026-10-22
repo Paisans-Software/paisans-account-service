@@ -194,7 +194,7 @@ func (c *Client) SendLoginLink(ctx context.Context, userID string) error {
 	return nil
 }
 
-// ListUsers returns every user, for the admins' member search.
+// ListUsers returns every user, for the admins' members list.
 func (c *Client) ListUsers(ctx context.Context) ([]idp.User, error) { return c.listUsers(ctx) }
 
 func (c *Client) GetUser(ctx context.Context, id string) (idp.User, error) {

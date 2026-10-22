@@ -250,3 +250,11 @@ code { font-size: .8125rem; padding: .125rem .375rem; border-radius: var(--radiu
 .copy-row { display: flex; gap: .5rem; align-items: center; margin-bottom: 1rem; }
 .link { flex: 1; min-width: 0; margin: 0; padding: .5rem .75rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 	word-break: break-all; background: color-mix(in oklab, var(--input) 50%, transparent); border-radius: var(--radius-3xl); }
+
+/* The members list: a wide table scrolls inside its card, and its headers sort it */
+.table-scroll { overflow-x: auto; margin-bottom: 1rem; }
+.table-scroll td { white-space: nowrap; }
+th a { text-decoration: none; }
+th a:hover { text-decoration: underline; }
+.pager { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+.pager .muted { flex: 1; text-align: center; }

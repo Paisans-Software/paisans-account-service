@@ -11,7 +11,7 @@ All notable changes to this project are documented here, in the
 
 ### Changed
 
-- The admin queue of people waiting to join is called Invite Requests, in the sidebar and on its page. The pages, errors and emails that mentioned an application call it a request to join, in both signup modes.
+- The admin queue of people waiting to join is called Invite Requests. Pages, errors and emails that said application say request to join, in both signup modes.
 
 ### Fixed
 

@@ -1,6 +1,7 @@
 package flow
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -28,9 +29,6 @@ var (
 
 // maxReason bounds the free text an admin gives for a ban or a recovery.
 const maxReason = 1000
-
-// maxSearchResults bounds one member search.
-const maxSearchResults = 50
 
 // IsOperator reports whether username is one of the deployment's operators.
 func (s *Service) IsOperator(username string) bool {
@@ -65,35 +63,129 @@ func (s *Service) row(u idp.User, admin Member, bans map[string]store.Ban) Membe
 	return r
 }
 
-// SearchMembers finds users whose username, display name or email contains
-// q, ignoring case. An empty q finds nobody.
-func (s *Service) SearchMembers(ctx context.Context, admin Member, q string) ([]MemberRow, error) {
-	if !admin.Admin {
-		return nil, ErrForbidden
+// Status is the row's state: banned, disabled at the identity provider, or
+// active. A ban outranks the provider's flag.
+func (r MemberRow) Status() string {
+	switch {
+	case r.Ban != nil:
+		return "banned"
+	case r.Disabled:
+		return "disabled"
 	}
-	q = strings.ToLower(strings.TrimSpace(q))
-	if q == "" {
-		return nil, nil
+	return "active"
+}
+
+// The columns the members list sorts by.
+const (
+	SortName     = "name"
+	SortUsername = "username"
+	SortEmail    = "email"
+	SortStatus   = "status"
+)
+
+// MembersPerPage is how many rows one page of the members list holds.
+const MembersPerPage = 50
+
+// maxQuery bounds a member search: the longest an email address can be.
+const maxQuery = 254
+
+// MembersQuery is one page of the members list as asked for.
+type MembersQuery struct {
+	// Q keeps the users whose username, display name or email contains it,
+	// ignoring case; blank keeps everyone.
+	Q string
+	// Sort is one of the Sort columns; any other value is SortName. Desc
+	// reverses the order.
+	Sort string
+	Desc bool
+	// Page counts from 1; a page outside the list is its nearest one.
+	Page int
+}
+
+// MembersPage is one page of the members list: the query as applied, its
+// rows, and how many pages and rows the whole list has.
+type MembersPage struct {
+	MembersQuery
+	Rows         []MemberRow
+	Pages, Total int
+}
+
+// statusRank orders Status values: active, then disabled, then banned.
+var statusRank = map[string]int{"active": 0, "disabled": 1, "banned": 2}
+
+// memberOrder compares two rows by column, then by name, username and ID,
+// so that every order is total and a page never shifts between requests.
+func memberOrder(column string) func(a, b MemberRow) int {
+	name := func(r MemberRow) string {
+		if strings.TrimSpace(r.DisplayName) == "" {
+			return strings.ToLower(r.Username)
+		}
+		return strings.ToLower(r.DisplayName)
+	}
+	var first func(a, b MemberRow) int
+	switch column {
+	case SortUsername:
+		first = func(a, b MemberRow) int {
+			return strings.Compare(strings.ToLower(a.Username), strings.ToLower(b.Username))
+		}
+	case SortEmail:
+		first = func(a, b MemberRow) int { return strings.Compare(strings.ToLower(a.Email), strings.ToLower(b.Email)) }
+	case SortStatus:
+		first = func(a, b MemberRow) int { return cmp.Compare(statusRank[a.Status()], statusRank[b.Status()]) }
+	default:
+		first = func(MemberRow, MemberRow) int { return 0 }
+	}
+	return func(a, b MemberRow) int {
+		return cmp.Or(first(a, b), strings.Compare(name(a), name(b)),
+			strings.Compare(strings.ToLower(a.Username), strings.ToLower(b.Username)), strings.Compare(a.ID, b.ID))
+	}
+}
+
+// Members lists the users, filtered by q.Q, sorted by q.Sort and cut to page
+// q.Page of MembersPerPage rows. Unknown or out-of-range values in q are
+// replaced by the nearest valid ones, and the page returned says which were
+// applied.
+func (s *Service) Members(ctx context.Context, admin Member, q MembersQuery) (MembersPage, error) {
+	if !admin.Admin {
+		return MembersPage{}, ErrForbidden
+	}
+	q.Q = strings.TrimSpace(q.Q)
+	if utf8.RuneCountInString(q.Q) > maxQuery {
+		q.Q = string([]rune(q.Q)[:maxQuery])
+	}
+	switch q.Sort {
+	case SortName, SortUsername, SortEmail, SortStatus:
+	default:
+		q.Sort = SortName
 	}
 	users, err := s.p.ListUsers(ctx)
 	if err != nil {
-		return nil, err
+		return MembersPage{}, err
 	}
 	bans, err := s.st.CurrentBans(ctx)
 	if err != nil {
-		return nil, err
+		return MembersPage{}, err
 	}
-	var out []MemberRow
+	needle := strings.ToLower(q.Q)
+	var all []MemberRow
 	for _, u := range users {
-		if strings.Contains(strings.ToLower(u.Username), q) || strings.Contains(strings.ToLower(u.DisplayName), q) ||
-			strings.Contains(strings.ToLower(u.Email), q) {
-			out = append(out, s.row(u, admin, bans))
-			if len(out) == maxSearchResults {
-				break
-			}
+		if strings.Contains(strings.ToLower(u.Username), needle) || strings.Contains(strings.ToLower(u.DisplayName), needle) ||
+			strings.Contains(strings.ToLower(u.Email), needle) {
+			all = append(all, s.row(u, admin, bans))
 		}
 	}
-	return out, nil
+	order := memberOrder(q.Sort)
+	if q.Desc {
+		slices.SortFunc(all, func(a, b MemberRow) int { return order(b, a) })
+	} else {
+		slices.SortFunc(all, order)
+	}
+	p := MembersPage{Total: len(all), Pages: max(1, (len(all)+MembersPerPage-1)/MembersPerPage)}
+	q.Page = min(max(q.Page, 1), p.Pages)
+	p.MembersQuery = q
+	from := (q.Page - 1) * MembersPerPage
+	p.Rows = all[from:min(from+MembersPerPage, len(all))]
+	return p, nil
 }
 
 // MemberByID is one user, for the ban confirmation page.

@@ -449,7 +449,7 @@ func TestAdminDismissesUnsentLink(t *testing.T) {
 	h.as(admin, "POST", "/admin/applications/"+id+"/approve", url.Values{"csrf": {"tok"}})
 	body := h.as(admin, "GET", "/admin", nil).Body.String()
 	if !strings.Contains(body, `action="/admin/applications/`+id+`/dismiss"`) ||
-		!strings.Contains(body, "Dismissing stops tracking this application. If the account exists in Pocket ID, deal with it there.") {
+		!strings.Contains(body, "Dismissing stops tracking this request. If the account exists in Pocket ID, deal with it there.") {
 		t.Fatalf("no dismiss beside retry: %s", body)
 	}
 	if rec := h.as(member, "POST", "/admin/applications/"+id+"/dismiss", url.Values{"csrf": {"tok"}}); rec.Code != 403 {
@@ -487,6 +487,10 @@ func TestHostileValuesEscapedOnEveryPage(t *testing.T) {
 		"home":   home,
 		"invite": inviteRec,
 		"admin":  h.as(evil, "GET", "/admin", nil),
+		// The members list shows the username; a search also echoes q into
+		// the search box and into every sort and page link.
+		"members":        h.as(admin, "GET", "/admin/members?sort="+url.QueryEscape(hostile)+"&dir="+url.QueryEscape(hostile), nil),
+		"members search": h.as(admin, "GET", "/admin/members?q="+url.QueryEscape(hostile)+"&page="+url.QueryEscape(hostile), nil),
 	} {
 		body := rec.Body.String()
 		if rec.Code != 200 || strings.Contains(body, "<script>") || !strings.Contains(body, "&lt;script&gt;alert(1)&lt;/script&gt;") {
@@ -526,7 +530,7 @@ func TestAdminOffersDismissForStaleApproval(t *testing.T) {
 		t.Fatal(err)
 	}
 	action := `action="/admin/applications/` + id + `/dismiss"`
-	note := "Dismissing stops tracking this application. If the account exists in Pocket ID, deal with it there."
+	note := "Dismissing stops tracking this request. If the account exists in Pocket ID, deal with it there."
 	if body := h.as(admin, "GET", "/admin", nil).Body.String(); strings.Contains(body, action) || strings.Contains(body, note) {
 		t.Fatalf("fresh claim offers dismiss: %s", body)
 	}

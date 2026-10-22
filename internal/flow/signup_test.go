@@ -23,7 +23,7 @@ func TestRegisterEndToEnd(t *testing.T) {
 	if err != nil || len(p) != 1 || p[0].InviteID != 0 || p[0].InviterUsername != "" {
 		t.Fatalf("%+v %v", p, err)
 	}
-	if notice := m.To("root@x.org"); len(notice) != 1 || notice[0].Subject != "An application is waiting" {
+	if notice := m.To("root@x.org"); len(notice) != 1 || notice[0].Subject != "An invite request is waiting" {
 		t.Fatalf("admin notice: %+v", notice)
 	}
 	if err := s.Approve(ctx, root, p[0].ID); err != nil {
@@ -52,7 +52,7 @@ func TestRegisterDeclineHasNoInviter(t *testing.T) {
 	if err := s.Decline(ctx, root, p[0].ID); err != nil {
 		t.Fatal(err)
 	}
-	if got := m.To("bob@example.org"); len(got) != 2 || got[1].Subject != "About your application" {
+	if got := m.To("bob@example.org"); len(got) != 2 || got[1].Subject != "About your request to join" {
 		t.Fatalf("%+v", got)
 	}
 }
@@ -88,7 +88,7 @@ func TestBannedAddressRefusedInBothModes(t *testing.T) {
 			t.Fatalf("approval=%v: something was recorded: %d pending, %d created", approval, len(p), f.Created)
 		}
 		got := m.To("Bob@EXAMPLE.org")
-		if len(got) != 2 || got[0].Subject != "About your application" || !strings.Contains(got[0].Body, "can't be accepted") {
+		if len(got) != 2 || got[0].Subject != "About your request to join" || !strings.Contains(got[0].Body, "can't be accepted") {
 			t.Fatalf("approval=%v: %+v", approval, got)
 		}
 		if len(m.To("root@x.org")) != 0 {

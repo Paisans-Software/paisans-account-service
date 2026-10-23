@@ -5,6 +5,8 @@ All notable changes to this project are documented here, in the
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-23
+
 ### Added
 
 - `/admin/members` lists every member, 50 to a page, and the search narrows that list. Each column (name, username, email, and status: active, disabled or banned) sorts it from its header, again to reverse it.

@@ -35,7 +35,10 @@ type renderer struct {
 	pages  map[string]*template.Template
 	accent template.CSS
 	logo   string
-	idp    idpLink
+	// clientLogos is the path Pocket ID serves each OIDC client's logo under,
+	// a prefix the policy admits and nothing wider.
+	clientLogos string
+	idp         idpLink
 }
 
 // idpLink is the identity provider as a page shows it: its public URL, the
@@ -55,7 +58,8 @@ func newRenderer(accent, idpURL string) (*renderer, error) {
 		return nil, errors.New("the identity provider URL must be an absolute URL")
 	}
 	r := &renderer{pages: map[string]*template.Template{}, logo: idpURL + "/api/application-images/logo",
-		idp: idpLink{URL: idpURL, Host: u.Host}}
+		clientLogos: idpURL + "/api/oidc/clients/",
+		idp:         idpLink{URL: idpURL, Host: u.Host}}
 	// Pocket ID's accent_color is "default" or a CSS colour such as
 	// "oklch(0.63 0.2 15)". Only a value the rule admits is passed through as
 	// trusted CSS; html/template would otherwise defuse the parentheses.
@@ -76,7 +80,7 @@ func newRenderer(accent, idpURL string) (*renderer, error) {
 func (r *renderer) page(w http.ResponseWriter, status int, name string, v view) {
 	v.Accent, v.LogoURL, v.Page = r.accent, r.logo, name
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Content-Security-Policy", "default-src 'self'; img-src 'self' "+r.logo+"; style-src 'self' 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'")
+	w.Header().Set("Content-Security-Policy", "default-src 'self'; img-src 'self' "+r.logo+" "+r.clientLogos+"; style-src 'self' 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'")
 	w.WriteHeader(status)
 	if err := r.pages[name].ExecuteTemplate(w, "layout", v); err != nil {
 		slog.Error("render", "page", name, "error", err)

@@ -43,6 +43,24 @@ type Member struct {
 	Admin         bool
 }
 
+// IsAdmin reports whether the user is in the admin group at the identity
+// provider now. A user it no longer has is not an admin.
+func (s *Service) IsAdmin(ctx context.Context, sub string) (bool, error) {
+	gs, err := s.p.UserGroups(ctx, sub)
+	if errors.Is(err, idp.ErrNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	for _, g := range gs {
+		if g.Name == s.s.AdminGroup {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 type Settings struct {
 	Quota           int
 	RequireApproval bool
@@ -59,7 +77,8 @@ type Settings struct {
 	LoginLinkDays int
 	// IDPURL is the identity provider as members reach it, its public URL
 	// (config.Config.IDPPublicURL), for mail that sends someone there to
-	// sign in. It is never ACCOUNT_IDP_URL, which is a private address.
+	// sign in and for the apps' logos. It is never ACCOUNT_IDP_URL, which is
+	// a private address.
 	IDPURL string
 	// Operators are the usernames the deployment declares as operators: the
 	// service never bans them or changes their address or name.
@@ -150,8 +169,47 @@ func (s *Service) CreateInvite(ctx context.Context, m Member, nonce string) (str
 	return s.s.JoinURL + "/i/" + tok, inv, nil
 }
 
-func (s *Service) Invites(ctx context.Context, m Member) ([]store.Invite, error) {
-	return s.st.ListInvites(ctx, m.Sub)
+// Invite is one of a member's invites. Invitee is the account a used invite
+// made, or nil for an invite not used, or used before the service recorded it.
+type Invite struct {
+	store.Invite
+	Invitee *Invitee
+}
+
+// Invitee is the account an invite made, as the provider has it now. Gone is
+// an account the provider no longer has; Unavailable is one it could not be
+// asked about. Either way the names are empty.
+type Invitee struct {
+	Username, DisplayName string
+	Gone, Unavailable     bool
+}
+
+// Invites returns the member's invites, each used one with its invitee read
+// from the provider. A lookup that fails marks that invitee Unavailable and
+// fails nothing else.
+func (s *Service) Invites(ctx context.Context, m Member) ([]Invite, error) {
+	invites, err := s.st.ListInvites(ctx, m.Sub)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Invite, len(invites))
+	for n, i := range invites {
+		out[n] = Invite{Invite: i}
+		if i.InviteeSub == "" {
+			continue
+		}
+		u, err := s.p.GetUser(ctx, i.InviteeSub)
+		switch {
+		case errors.Is(err, idp.ErrNotFound):
+			out[n].Invitee = &Invitee{Gone: true}
+		case err != nil:
+			slog.Warn("could not look up an invitee", "invite_id", i.ID, "error", err)
+			out[n].Invitee = &Invitee{Unavailable: true}
+		default:
+			out[n].Invitee = &Invitee{Username: u.Username, DisplayName: u.DisplayName}
+		}
+	}
+	return out, nil
 }
 
 func (s *Service) Revoke(ctx context.Context, m Member, id int64) error {
@@ -280,11 +338,11 @@ func (s *Service) submit(ctx context.Context, in Applicant, record func(store.Ne
 		// the admins can retry from the pending list.
 		slog.Warn("automatic approval failed; left for an admin", "application_id", app.ID, "error", err)
 	}
-	if err := s.m.Send(ctx, []string{app.Email}, "We received your application",
-		"Thank you for agreeing to the code of conduct. An admin will review your application, and you will get another email when they have approved it.\n"); err != nil {
+	if err := s.m.Send(ctx, []string{app.Email}, "We received your request to join",
+		"Thank you for agreeing to the code of conduct. An admin will review your request, and you will get another email when they have approved it.\n"); err != nil {
 		slog.Warn("could not acknowledge an application", "error", err)
 	}
-	s.notifyAdmins(ctx, "An application is waiting", "Someone has applied to join and is waiting for approval.\n\n"+s.s.AccountURL+"/admin\n")
+	s.notifyAdmins(ctx, "An invite request is waiting", "Someone has asked to join and is waiting for approval.\n\n"+s.s.AccountURL+"/admin\n")
 	return false, nil
 }
 
@@ -318,7 +376,7 @@ func (s *Service) banned(ctx context.Context, email string) (bool, error) {
 // tellRefused mails a refused signup's address the reason, which no page
 // shows.
 func (s *Service) tellRefused(ctx context.Context, email, reason string) {
-	subject, body := "About your application", "Your application to join can't be accepted.\n"
+	subject, body := "About your request to join", "Your request to join can't be accepted.\n"
 	if reason == refusedInUse {
 		subject = "You already have an account"
 		body = "Someone asked to join with this email address, which already has an account. If it was you, go to " +
@@ -500,10 +558,10 @@ func (s *Service) Decline(ctx context.Context, admin Member, id int64) error {
 	slog.Info("write", "action", "application.decline", "application_id", id)
 	subject := "About your invitation"
 	if app.InviterUsername == "" {
-		subject = "About your application"
+		subject = "About your request to join"
 	}
 	if err := s.m.Send(ctx, []string{app.Email}, subject,
-		"Thank you for your interest. Your application to join was not accepted.\n"); err != nil {
+		"Thank you for your interest. Your request to join was not accepted.\n"); err != nil {
 		slog.Warn("could not tell the applicant of a decline", "error", err)
 	}
 	if app.InviterUsername == "" {
@@ -514,7 +572,7 @@ func (s *Service) Decline(ctx context.Context, admin Member, id int64) error {
 		slog.Warn("could not look up the inviter of a declined application", "application_id", id, "error", err)
 	} else if found && inviter.Email != "" {
 		if err := s.m.Send(ctx, []string{inviter.Email}, "An invite you sent was declined",
-			"An application made with one of your invites was declined. Your invite slot is free again.\n"); err != nil {
+			"A request to join made with one of your invites was declined. Your invite slot is free again.\n"); err != nil {
 			slog.Warn("could not tell the inviter of a decline", "error", err)
 		}
 	}

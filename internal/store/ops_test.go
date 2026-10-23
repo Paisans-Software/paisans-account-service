@@ -577,3 +577,40 @@ func TestRevokeOnlyOpen(t *testing.T) {
 		t.Fatalf("a refused revoke writes no audit row: %v", got)
 	}
 }
+
+// A used invite records the account it made, in the transaction that marks it
+// used; an invite no account has come from records none.
+func TestCompleteRecordsInvitee(t *testing.T) {
+	s := storetest.New(t)
+	now := time.Now()
+	s.CreateInvite(ctx, hash("a"), "sub", "alice", fresh(), now.Add(time.Hour), 0)
+	s.CreateInvite(ctx, hash("b"), "sub", "alice", fresh(), now.Add(time.Hour), 0)
+	app, _ := s.Apply(ctx, hash("a"), now, newApp("bob"))
+	if _, err := s.Apply(ctx, hash("b"), now, newApp("carol")); err != nil {
+		t.Fatal(err)
+	}
+	_, claim, _ := s.ClaimApplication(ctx, app.ID, "admin", now)
+	if err := s.MarkLinkUnsent(ctx, app.ID, claim, "idp-bob", "admin"); err != nil {
+		t.Fatal(err)
+	}
+	if inv, _ := s.ListInvites(ctx, "sub"); inv[0].InviteeSub != "" || inv[1].InviteeSub != "" {
+		t.Fatalf("an invite not yet used names its invitee: %+v", inv)
+	}
+	if err := s.CompleteApplication(ctx, app.ID, claim, "admin"); err != nil {
+		t.Fatal(err)
+	}
+	inv, err := s.ListInvites(ctx, "sub")
+	if err != nil {
+		t.Fatal(err)
+	}
+	byState := map[string]store.Invite{}
+	for _, i := range inv {
+		byState[i.State] = i
+	}
+	if u := byState["used"]; u.InviteeSub != "idp-bob" {
+		t.Fatalf("used invite: %+v", u)
+	}
+	if a := byState["applied"]; a.InviteeSub != "" {
+		t.Fatalf("applied invite: %+v", a)
+	}
+}

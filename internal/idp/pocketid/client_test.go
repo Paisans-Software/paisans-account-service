@@ -280,6 +280,22 @@ func TestAdminGroupEmails(t *testing.T) {
 	if _, err := c.AdminGroupEmails(context.Background(), "nobody"); err == nil {
 		t.Fatal("a missing group must be an error")
 	}
+	members, err := c.GroupMembers(context.Background(), "admins")
+	var ids []string
+	for _, u := range members {
+		ids = append(ids, u.ID)
+	}
+	if err != nil || strings.Join(ids, ",") != "1,2,3" || !members[2].Disabled {
+		t.Fatalf("members: %+v %v", members, err)
+	}
+	if _, err := c.GroupMembers(context.Background(), "nobody"); err == nil {
+		t.Fatal("a missing group must be an error")
+	}
+	for _, cl := range *calls {
+		if cl.Method != "GET" {
+			t.Fatalf("a read made a %s", cl.Method)
+		}
+	}
 }
 
 func TestErrorsDoNotEchoBodies(t *testing.T) {
@@ -316,6 +332,8 @@ func TestTransportErrorsDoNotEchoQuery(t *testing.T) {
 	check(err)
 	_, err = c.AdminGroupEmails(context.Background(), "secret")
 	check(err)
+	_, err = c.GroupMembers(context.Background(), "secret")
+	check(err)
 }
 
 // Every exported method, answered with a redirect of any kind, fails with
@@ -344,6 +362,7 @@ func TestRedirectIsAnErrorAndNotFollowed(t *testing.T) {
 			{"EmailTaken", func() error { _, err := c.EmailTaken(ctx, "bob@x.org"); return err }},
 			{"FindUser", func() error { _, _, err := c.FindUser(ctx, "bob"); return err }},
 			{"AdminGroupEmails", func() error { _, err := c.AdminGroupEmails(ctx, "admins"); return err }},
+			{"GroupMembers", func() error { _, err := c.GroupMembers(ctx, "admins"); return err }},
 			{"ListUsers", func() error { _, err := c.ListUsers(ctx); return err }},
 			{"GetUser", func() error { _, err := c.GetUser(ctx, "u1"); return err }},
 			{"ListGroups", func() error { _, err := c.ListGroups(ctx); return err }},
@@ -394,5 +413,58 @@ func TestCallsTakeTheCallersContext(t *testing.T) {
 	}
 	if len(*calls) != 0 {
 		t.Fatalf("a cancelled call sent %+v", *calls)
+	}
+}
+
+// ListClients lists every client, all pages, with the allowed groups the list
+// gives, makes no other request, and writes nothing.
+func TestListClientsReadsTheList(t *testing.T) {
+	launch := func(s string) any { return s }
+	list := []map[string]any{
+		{"id": "open", "name": "Open", "launchURL": launch("https://open.example.org"), "hasLogo": true},
+		{"id": "night", "name": "Night", "launchURL": launch("https://night.example.org"), "hasDarkLogo": true},
+		{"id": "wiki", "name": "Wiki", "launchURL": launch("https://wiki.example.org"), "isGroupRestricted": true,
+			"allowedUserGroups": []any{map[string]any{"id": "g-members", "name": "members"}, map[string]any{"id": "g-wiki", "name": "wiki"}}},
+		{"id": "hidden", "name": "Hidden", "launchURL": nil, "isGroupRestricted": true},
+		{"id": "blank", "name": "Blank", "launchURL": launch(""), "isGroupRestricted": true},
+	}
+	var calls []call
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls = append(calls, call{Method: r.Method, Path: r.URL.Path, Key: r.Header.Get("X-API-Key")})
+		if r.Method != "GET" || r.URL.Path != "/api/oidc/clients" {
+			w.WriteHeader(404)
+			return
+		}
+		page := 1
+		fmt.Sscan(r.URL.Query().Get("pagination[page]"), &page)
+		data := list[:3]
+		if page == 2 {
+			data = list[3:]
+		}
+		json.NewEncoder(w).Encode(map[string]any{"data": data, "pagination": map[string]any{"totalPages": 2, "currentPage": page}})
+	}))
+	t.Cleanup(srv.Close)
+	c := mustNew(t, srv.URL, srv.Client(), week)
+	got, err := c.ListClients(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []idp.Client{
+		{ID: "open", Name: "Open", LaunchURL: "https://open.example.org", HasLogo: true},
+		{ID: "night", Name: "Night", LaunchURL: "https://night.example.org", HasDarkLogo: true},
+		{ID: "wiki", Name: "Wiki", LaunchURL: "https://wiki.example.org", Restricted: true, AllowedGroupIDs: []string{"g-members", "g-wiki"}},
+		{ID: "hidden", Name: "Hidden", Restricted: true},
+		{ID: "blank", Name: "Blank", Restricted: true},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %+v\nwant %+v", got, want)
+	}
+	if len(calls) != 2 {
+		t.Fatalf("%d requests, want the 2 list pages: %+v", len(calls), calls)
+	}
+	for _, k := range calls {
+		if k.Method != "GET" || k.Path != "/api/oidc/clients" || k.Key != "KEY" {
+			t.Errorf("request %s %s, key %q", k.Method, k.Path, k.Key)
+		}
 	}
 }

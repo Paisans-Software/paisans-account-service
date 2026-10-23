@@ -28,6 +28,9 @@ type Invite struct {
 	InviterSub, InviterUsername string
 	CreatedAt, ExpiresAt        time.Time
 	State                       string
+	// InviteeSub is the Pocket ID user a used invite made, or empty for an
+	// invite not used, or used before the service recorded it.
+	InviteeSub string
 }
 
 func audit(ctx context.Context, tx pgx.Tx, actor, action string, id int64) error {
@@ -80,14 +83,14 @@ func (s *Store) CreateInvite(ctx context.Context, tokenHash []byte, inviterSub, 
 }
 
 func (s *Store) ListInvites(ctx context.Context, inviterSub string) ([]Invite, error) {
-	rows, err := s.pool.Query(ctx, `SELECT id, inviter_sub, inviter_username, created_at, expires_at, state
+	rows, err := s.pool.Query(ctx, `SELECT id, inviter_sub, inviter_username, created_at, expires_at, state, COALESCE(invitee_sub,'')
 		FROM invites WHERE inviter_sub=$1 ORDER BY created_at DESC, id DESC`, inviterSub)
 	if err != nil {
 		return nil, err
 	}
 	return pgx.CollectRows(rows, func(r pgx.CollectableRow) (Invite, error) {
 		var i Invite
-		err := r.Scan(&i.ID, &i.InviterSub, &i.InviterUsername, &i.CreatedAt, &i.ExpiresAt, &i.State)
+		err := r.Scan(&i.ID, &i.InviterSub, &i.InviterUsername, &i.CreatedAt, &i.ExpiresAt, &i.State, &i.InviteeSub)
 		return i, err
 	})
 }

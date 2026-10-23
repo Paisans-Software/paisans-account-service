@@ -165,6 +165,57 @@ func TestMemberCannotSeeAdmin(t *testing.T) {
 	}
 }
 
+// A promotion or demotion takes effect on the next request, not the next
+// sign-in: the session's admin flag is the one it signed in with, and the
+// admin group is read afresh.
+func TestAdminGroupIsReadEachRequest(t *testing.T) {
+	h := newHarness(t, true)
+	h.fake.Groups["admins"] = append(h.fake.Groups["admins"], "alice")
+	if rec := h.as(member, "GET", "/admin", nil); rec.Code != 200 {
+		t.Fatalf("promoted: got %d", rec.Code)
+	}
+	if rec := h.as(member, "GET", "/", nil); !strings.Contains(rec.Body.String(), `href="/admin"`) {
+		t.Fatal("promoted: no admin links")
+	}
+	h.fake.Groups["admins"] = []string{"alice"}
+	if rec := h.as(admin, "GET", "/admin", nil); rec.Code != 403 {
+		t.Fatalf("demoted: got %d", rec.Code)
+	}
+	if rec := h.as(admin, "POST", "/admin/applications/1/approve", url.Values{"csrf": {"tok"}}); rec.Code != 403 {
+		t.Fatalf("demoted approve: got %d", rec.Code)
+	}
+	if rec := h.as(admin, "GET", "/", nil); strings.Contains(rec.Body.String(), `href="/admin"`) {
+		t.Fatal("demoted: admin links shown")
+	}
+}
+
+// An admin check that cannot reach the identity provider grants nothing.
+func TestAdminCheckFailsClosed(t *testing.T) {
+	h := newHarness(t, true)
+	h.fake.FailLookup = errors.New("down")
+	if rec := h.as(admin, "GET", "/admin", nil); rec.Code != 503 {
+		t.Fatalf("got %d", rec.Code)
+	}
+}
+
+func TestHomeOffersSignOut(t *testing.T) {
+	h := newHarness(t, true)
+	body := h.as(member, "GET", "/", nil).Body.String()
+	if !strings.Contains(body, `action="/auth/logout"`) || !strings.Contains(body, `name="csrf" value="tok"`) {
+		t.Fatal("no sign-out form")
+	}
+	rec := h.as(member, "POST", "/auth/logout", url.Values{"csrf": {"tok"}})
+	if rec.Code != 303 {
+		t.Fatalf("got %d", rec.Code)
+	}
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == "account_session" && c.MaxAge < 0 {
+			return
+		}
+	}
+	t.Fatal("session cookie not cleared")
+}
+
 func TestAdminApproves(t *testing.T) {
 	h := newHarness(t, true)
 	applyBob(t, h)
@@ -398,7 +449,7 @@ func TestAdminDismissesUnsentLink(t *testing.T) {
 	h.as(admin, "POST", "/admin/applications/"+id+"/approve", url.Values{"csrf": {"tok"}})
 	body := h.as(admin, "GET", "/admin", nil).Body.String()
 	if !strings.Contains(body, `action="/admin/applications/`+id+`/dismiss"`) ||
-		!strings.Contains(body, "Dismissing stops tracking this application. If the account exists in Pocket ID, deal with it there.") {
+		!strings.Contains(body, "Dismissing stops tracking this request. If the account exists in Pocket ID, deal with it there.") {
 		t.Fatalf("no dismiss beside retry: %s", body)
 	}
 	if rec := h.as(member, "POST", "/admin/applications/"+id+"/dismiss", url.Values{"csrf": {"tok"}}); rec.Code != 403 {
@@ -424,22 +475,38 @@ const hostile = `"><script>alert(1)</script>`
 func TestHostileValuesEscapedOnEveryPage(t *testing.T) {
 	h := newHarness(t, true)
 	evil := Session{Sub: "s-evil", Username: hostile, CSRF: "tok", Exp: time.Now().Add(time.Hour).Unix()}
+	h.fake.Users = append(h.fake.Users, idp.User{ID: evil.Sub, Username: hostile})
+	// A hostile client name, a launch URL that is a script, and one that
+	// tries to break out of the href.
+	h.fake.Clients = []idp.Client{
+		{ID: "c-evil", Name: "<script>x</script>", LaunchURL: "https://evil.example.org"},
+		{ID: "c-js", Name: "js", LaunchURL: "javascript:alert(1)"},
+		{ID: "c-quote", Name: "quote", LaunchURL: "https://q.example.org/?q=" + hostile},
+	}
 	tok, _ := h.inviteAs(t, flow.Member{Sub: evil.Sub, Username: evil.Username})
 	inviteRec := h.get(joinHost, "/i/"+tok)
 	if _, err := h.flow.Apply(context.Background(), tok, flow.Applicant{Username: "bob", Email: "bob@x.org", DisplayName: hostile, FirstName: "Bob", Agreed: true}); err != nil {
 		t.Fatal(err)
 	}
-	evilAdmin := evil
-	evilAdmin.Admin = true
+	home := h.as(evil, "GET", "/", nil)
+	h.fake.Groups["admins"] = append(h.fake.Groups["admins"], hostile)
 	for name, rec := range map[string]*httptest.ResponseRecorder{
-		"home":   h.as(evil, "GET", "/", nil),
+		"home":   home,
 		"invite": inviteRec,
-		"admin":  h.as(evilAdmin, "GET", "/admin", nil),
+		"admin":  h.as(evil, "GET", "/admin", nil),
+		// The members list shows the username; a search also echoes q into
+		// the search box and into every sort and page link.
+		"members":        h.as(admin, "GET", "/admin/members?sort="+url.QueryEscape(hostile)+"&dir="+url.QueryEscape(hostile), nil),
+		"members search": h.as(admin, "GET", "/admin/members?q="+url.QueryEscape(hostile)+"&page="+url.QueryEscape(hostile), nil),
 	} {
 		body := rec.Body.String()
 		if rec.Code != 200 || strings.Contains(body, "<script>") || !strings.Contains(body, "&lt;script&gt;alert(1)&lt;/script&gt;") {
 			t.Errorf("%s: %d %s", name, rec.Code, body)
 		}
+	}
+	if body := home.Body.String(); !strings.Contains(body, "<b>&lt;script&gt;x&lt;/script&gt;</b>") ||
+		strings.Contains(body, "javascript:") || strings.Contains(body, `"><script>`) || !strings.Contains(body, `href="https://q.example.org/?q=%22%3e%3cscript%3ealert%281%29%3c/script%3e"`) {
+		t.Errorf("home apps: %s", body)
 	}
 }
 
@@ -474,7 +541,7 @@ func TestAdminOffersDismissForStaleApproval(t *testing.T) {
 		t.Fatal(err)
 	}
 	action := `action="/admin/applications/` + id + `/dismiss"`
-	note := "Dismissing stops tracking this application. If the account exists in Pocket ID, deal with it there."
+	note := "Dismissing stops tracking this request. If the account exists in Pocket ID, deal with it there."
 	if body := h.as(admin, "GET", "/admin", nil).Body.String(); strings.Contains(body, action) || strings.Contains(body, note) {
 		t.Fatalf("fresh claim offers dismiss: %s", body)
 	}
@@ -504,5 +571,115 @@ func TestConcurrentRetryShowsBusy(t *testing.T) {
 	first := h.as(admin, "POST", "/admin/applications/"+id+"/approve", url.Values{"csrf": {"tok"}})
 	if first.Header().Get("Location") != "/admin" || second.Header().Get("Location") != "/admin?error=busy" || h.fake.LinksSent != 1 {
 		t.Fatalf("first %s, second %s, links %d", first.Header().Get("Location"), second.Header().Get("Location"), h.fake.LinksSent)
+	}
+}
+
+// The home page names who a used invite made, as Pocket ID has them now,
+// escaped; an applied invite names nobody, and an account deleted or not to
+// be looked up says so without failing the page.
+func TestHomeNamesTheInvitee(t *testing.T) {
+	h := newHarness(t, true)
+	link, _, err := h.flow.CreateInvite(context.Background(), flow.Member{Sub: "s-alice", Username: "alice"}, flow.NewNonce())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tok := link[strings.LastIndex(link, "/")+1:]
+	if _, err := h.flow.Apply(context.Background(), tok, flow.Applicant{Username: "bob", Email: "bob@x.org", DisplayName: hostile, FirstName: "Bob", Agreed: true}); err != nil {
+		t.Fatal(err)
+	}
+	if body := h.as(member, "GET", "/", nil).Body.String(); strings.Contains(body, "bob") || !strings.Contains(body, "<td>applied</td>") {
+		t.Fatalf("an applied invite names its applicant: %s", body)
+	}
+	p, _ := h.flow.Pending(context.Background())
+	if err := h.flow.Approve(context.Background(), flow.Member{Sub: "s-root", Username: "root", Admin: true}, p[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	rec := h.as(member, "GET", "/", nil)
+	body := rec.Body.String()
+	if rec.Code != 200 || strings.Contains(body, "<script>") ||
+		!strings.Contains(body, `<td>used</td><td>&#34;&gt;&lt;script&gt;alert(1)&lt;/script&gt;<br><span class="muted">bob</span></td>`) {
+		t.Fatalf("used invite: %d %s", rec.Code, body)
+	}
+	h.fake.FailGetUser = errors.New("pocket id down")
+	rec = h.as(member, "GET", "/", nil)
+	if body := rec.Body.String(); rec.Code != 200 || !strings.Contains(body, `<td>used</td><td><span class="muted">Can't be looked up right now</span></td>`) {
+		t.Fatalf("lookup failed: %d %s", rec.Code, body)
+	}
+	h.fake.FailGetUser = nil
+	h.fake.Users = h.fake.Users[:3]
+	rec = h.as(member, "GET", "/", nil)
+	if body := rec.Body.String(); rec.Code != 200 || !strings.Contains(body, `<td>used</td><td><span class="muted">Account deleted</span></td>`) {
+		t.Fatalf("deleted account: %d %s", rec.Code, body)
+	}
+}
+
+// The Your apps card comes first on the home page, whatever the signup mode:
+// one tile per app, linking to its launch URL, with Pocket ID's logo or the
+// name's letter.
+func TestHomeListsApps(t *testing.T) {
+	for _, signup := range []string{config.SignupInvite, config.SignupOpen} {
+		h := newHarnessSignup(t, signup)
+		h.fake.Clients = []idp.Client{
+			{ID: "c-wiki", Name: "wiki", LaunchURL: "https://wiki.example.org/start"},
+			{ID: "c-forum", Name: "Forum", LaunchURL: "https://forum.example.org", HasLogo: true},
+		}
+		rec := h.as(member, "GET", "/", nil)
+		body := rec.Body.String()
+		forum := `<a class="app-tile" href="https://forum.example.org"><picture><source media="(prefers-color-scheme: dark)" srcset="https://id.example.org/api/oidc/clients/c-forum/logo?light=false"><img src="https://id.example.org/api/oidc/clients/c-forum/logo" alt=""></picture><b>Forum</b><span class="muted">forum.example.org</span></a>`
+		wiki := `<a class="app-tile" href="https://wiki.example.org/start"><span class="app-letter">W</span><b>wiki</b><span class="muted">wiki.example.org</span></a>`
+		apps := strings.Index(body, `<div class="card"><h1>Your apps</h1>`)
+		first := strings.Index(body, `<div class="card">`)
+		if rec.Code != 200 || apps < 0 || apps != first || !strings.Contains(body, `<div class="apps">`+forum+wiki+`</div>`) {
+			t.Errorf("%s: %d %s", signup, rec.Code, body)
+		}
+	}
+}
+
+// A member Pocket ID gives no app is told so.
+func TestHomeAppsEmpty(t *testing.T) {
+	h := newHarness(t, true)
+	h.fake.Clients = []idp.Client{{ID: "c-ops", Name: "Uptime", LaunchURL: "https://up.example.org", Restricted: true, AllowedGroupIDs: []string{"g-operators"}}}
+	rec := h.as(member, "GET", "/", nil)
+	if body := rec.Body.String(); rec.Code != 200 || !strings.Contains(body, `<h1>Your apps</h1><p class="muted">You don't have any apps yet.</p></div>`) ||
+		strings.Contains(body, "app-tile") {
+		t.Fatalf("%d %s", rec.Code, body)
+	}
+}
+
+// When Pocket ID's clients cannot be read, the card says so and the rest of
+// the page, the invites included, still renders.
+func TestHomeAppsUnavailable(t *testing.T) {
+	h := newHarness(t, true)
+	h.invite(t)
+	h.fake.FailClients = true
+	rec := h.as(member, "GET", "/", nil)
+	if body := rec.Body.String(); rec.Code != 200 || !strings.Contains(body, `<h1>Your apps</h1><p class="muted">Your apps can't be listed right now.</p></div>`) ||
+		!strings.Contains(body, "<td>open</td>") || !strings.Contains(body, "Make an invite link") {
+		t.Fatalf("%d %s", rec.Code, body)
+	}
+}
+
+// The policy admits Pocket ID's client logos and nothing wider: images come
+// from this service, the application logo and the clients' logo path. The
+// logo the page renders, in both themes, is under the path the policy admits.
+func TestHomeAppsCSP(t *testing.T) {
+	h := newHarness(t, true)
+	h.fake.Clients = []idp.Client{{ID: "c-forum", Name: "Forum", LaunchURL: "https://forum.example.org", HasLogo: true}}
+	rec := h.as(member, "GET", "/", nil)
+	const admitted = "https://id.example.org/api/oidc/clients/"
+	csp := rec.Header().Get("Content-Security-Policy")
+	if !strings.Contains(csp, "; img-src 'self' https://id.example.org/api/application-images/logo "+admitted+"; ") {
+		t.Fatalf("CSP %q", csp)
+	}
+	body := rec.Body.String()
+	_, img, ok := strings.Cut(body, `<a class="app-tile" href="https://forum.example.org"><picture>`)
+	if !ok {
+		t.Fatalf("no logo tile: %s", body)
+	}
+	for _, attr := range []string{`srcset="`, `<img src="`} {
+		_, v, ok := strings.Cut(img, attr)
+		if !ok || !strings.HasPrefix(v, admitted) {
+			t.Errorf("%s%.60s is not under %s", attr, v, admitted)
+		}
 	}
 }

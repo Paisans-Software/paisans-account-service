@@ -5,6 +5,25 @@ All notable changes to this project are documented here, in the
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-23
+
+### Added
+
+- `/admin/members` lists every member, 50 to a page, and the search narrows that list. Each column (name, username, email, and status: active, disabled or banned) sorts it from its header, again to reverse it.
+- Every signed-in page has a Sign out button in its header. The sign-out route had no button, so signing out of Pocket ID left this service's own session in place.
+- The home page opens with a Your apps card: a tile per app Pocket ID's dashboard shows the user, with its logo (dark in dark mode) or initial, name and host, linking to the app.
+- The home page's invites list names who joined with each used invite, as Pocket ID has them now, or "Account deleted". An invite used before this, or not yet used, names nobody.
+
+### Changed
+
+- Pocket ID 2.18 or newer is required. The Your apps card reads each app's allowed groups from Pocket ID's client list, which older versions leave out.
+- An operator who is the only admin recovers an account at once, recorded as theirs alone. A recovery needed a second admin's approval, so a single-admin deployment could never recover anyone.
+- The admin queue of people waiting to join is called Invite Requests. Pages, errors and emails that said application say request to join, in both signup modes.
+
+### Fixed
+
+- A change to the admin group takes effect on the user's next request. The session kept its sign-in's admin flag, so a promoted admin got "Forbidden" at `/admin` and a demoted one kept admin rights.
+
 ## [0.5.1] - 2026-10-19
 
 ### Added

@@ -40,8 +40,11 @@ func (s *Store) Sweep(ctx context.Context, now time.Time, applicationWait, decli
 			return err
 		}
 		r.DeclinesDeleted = tag.RowsAffected()
+		// A sole operator's request is never open: one its recovery left
+		// claimed, as after a crash, expires once the claim is stale.
 		tag, err = tx.Exec(ctx, `UPDATE recovery_requests SET state='expired', closed_at=$1
-			WHERE state='open' AND expires_at <= $1`, now)
+			WHERE (state='open' AND expires_at <= $1)
+			OR (state='approving' AND sole_operator AND claimed_at < $2)`, now, now.Add(-claimTimeout))
 		if err != nil {
 			return err
 		}

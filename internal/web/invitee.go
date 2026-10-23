@@ -97,8 +97,8 @@ func (s *server) submitted(w http.ResponseWriter, now bool) {
 			Heading: "Check your email", Body: "We've sent you a sign-in link. " + expiresIn(s.Flow.LoginLinkDays()), Recovery: &idp}})
 		return
 	}
-	s.Render.page(w, 200, "message.html", view{Title: "Thanks for applying", Data: messageData{
-		Heading: "Thanks for applying", Body: "An admin will review your application. Once you're approved, we'll email you a sign-in link."}})
+	s.Render.page(w, 200, "message.html", view{Title: "Thanks for asking to join", Data: messageData{
+		Heading: "Thanks for asking to join", Body: "An admin will review your request. Once you're approved, we'll email you a sign-in link."}})
 }
 
 // expiresIn states the sign-in link's lifetime as a sentence.

@@ -146,6 +146,35 @@ func (c *Client) EmailTaken(ctx context.Context, email string) (bool, error) {
 // group whose name (the value in the groups claim) is exactly group:
 // FindGroup compares exactly, and every user is listed with their groups.
 func (c *Client) AdminGroupEmails(ctx context.Context, group string) ([]string, error) {
+	us, err := c.groupUsers(ctx, group)
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, u := range us {
+		if deref(u.Email) != "" && !u.Disabled {
+			out = append(out, *u.Email)
+		}
+	}
+	return out, nil
+}
+
+// GroupMembers returns every member of the group named exactly group,
+// disabled ones and those without an address included.
+func (c *Client) GroupMembers(ctx context.Context, group string) ([]idp.User, error) {
+	us, err := c.groupUsers(ctx, group)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]idp.User, 0, len(us))
+	for _, u := range us {
+		out = append(out, toUser(u))
+	}
+	return out, nil
+}
+
+// groupUsers returns the users in the group named exactly group.
+func (c *Client) groupUsers(ctx context.Context, group string) ([]pid.User, error) {
 	g, err := c.api.FindGroup(ctx, group)
 	if err != nil {
 		return nil, wrap(err)
@@ -157,10 +186,10 @@ func (c *Client) AdminGroupEmails(ctx context.Context, group string) ([]string, 
 	if err != nil {
 		return nil, wrap(err)
 	}
-	var out []string
+	var out []pid.User
 	for _, u := range us {
-		if u.InGroup(g.ID) && deref(u.Email) != "" && !u.Disabled {
-			out = append(out, *u.Email)
+		if u.InGroup(g.ID) {
+			out = append(out, u)
 		}
 	}
 	return out, nil
@@ -194,7 +223,7 @@ func (c *Client) SendLoginLink(ctx context.Context, userID string) error {
 	return nil
 }
 
-// ListUsers returns every user, for the admins' member search.
+// ListUsers returns every user, for the admins' members list.
 func (c *Client) ListUsers(ctx context.Context) ([]idp.User, error) { return c.listUsers(ctx) }
 
 func (c *Client) GetUser(ctx context.Context, id string) (idp.User, error) {
@@ -298,6 +327,25 @@ func (c *Client) ChangeGroups(ctx context.Context, id string, add, remove []stri
 		return groupChange(before, named(next, before, all)), fmt.Errorf("%w: %w", idp.ErrUnconfirmed, err)
 	}
 	return groupChange(before, after), nil
+}
+
+// ListClients returns every OIDC client, for the apps a member may open, with
+// each one's allowed groups as the list gives them
+// (controller/oidc_controller.go:31 at v2.18.0).
+func (c *Client) ListClients(ctx context.Context) ([]idp.Client, error) {
+	cs, err := c.api.OIDCClients(ctx)
+	if err != nil {
+		return nil, wrap(err)
+	}
+	out := make([]idp.Client, 0, len(cs))
+	for _, oc := range cs {
+		cl := idp.Client{ID: oc.ID, Name: oc.Name, LaunchURL: deref(oc.LaunchURL), HasLogo: oc.HasLogo, HasDarkLogo: oc.HasDarkLogo, Restricted: oc.IsGroupRestricted}
+		for _, g := range oc.AllowedUserGroups {
+			cl.AllowedGroupIDs = append(cl.AllowedGroupIDs, g.ID)
+		}
+		out = append(out, cl)
+	}
+	return out, nil
 }
 
 func groupIDs(gs []idp.Group) []string {

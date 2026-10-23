@@ -3,6 +3,7 @@ package flow_test
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"log/slog"
 	"regexp"
 	"strings"
@@ -32,31 +33,104 @@ var ann = flow.Member{Sub: "a", Username: "ann", Admin: true}
 // rootR is root as their own session names them: their sub is their user ID.
 var rootR = flow.Member{Sub: "r", Username: "root", Admin: true}
 
-func TestSearchMembers(t *testing.T) {
+func usernames(rows []flow.MemberRow) string {
+	var got []string
+	for _, r := range rows {
+		got = append(got, r.Username)
+	}
+	return strings.Join(got, ",")
+}
+
+func TestMembersSearch(t *testing.T) {
 	s, f, _ := setup(t, true)
 	people(f)
-	for q, want := range map[string]string{"BOB": "bob", "builder": "bob", "opal@X": "opal", "": "", "zzz": ""} {
-		rows, err := s.SearchMembers(ctx, root, q)
-		var got []string
-		for _, r := range rows {
-			got = append(got, r.Username)
-		}
-		if err != nil || strings.Join(got, ",") != want {
-			t.Errorf("%q: %v %v", q, got, err)
+	for q, want := range map[string]string{"BOB": "bob", "builder": "bob", "opal@X": "opal", "  ": "ann,bob,opal,root", "zzz": ""} {
+		p, err := s.Members(ctx, root, flow.MembersQuery{Q: q})
+		if err != nil || usernames(p.Rows) != want {
+			t.Errorf("%q: %v %v", q, usernames(p.Rows), err)
 		}
 	}
-	rows, _ := s.SearchMembers(ctx, rootR, "o")
-	if len(rows) != 4 {
-		t.Fatalf("%+v", rows)
+	p, _ := s.Members(ctx, rootR, flow.MembersQuery{Q: "o"})
+	if len(p.Rows) != 4 || p.Total != 4 {
+		t.Fatalf("%+v", p)
 	}
-	for _, r := range rows {
+	for _, r := range p.Rows {
 		// Not the operator, not oneself; another admin may be banned.
 		if want := r.Username == "bob" || r.Username == "ann"; r.Bannable() != want {
 			t.Errorf("%s bannable %v", r.Username, r.Bannable())
 		}
 	}
-	if _, err := s.SearchMembers(ctx, alice, "bob"); !errors.Is(err, flow.ErrForbidden) {
-		t.Fatal("members cannot search")
+	if _, err := s.Members(ctx, alice, flow.MembersQuery{Q: "bob"}); !errors.Is(err, flow.ErrForbidden) {
+		t.Fatal("members cannot list members")
+	}
+}
+
+// With no query every user is listed, by name unless told otherwise; an
+// unknown column is the default one.
+func TestMembersSort(t *testing.T) {
+	s, f, _ := setupFull(t)
+	people(f)
+	f.Users[0].DisplayName = "zed"    // root
+	f.Users[2].Email = "a-opal@x.org" // opal
+	f.Users = append(f.Users, idp.User{ID: "c", Username: "cy", Email: "cy@x.org", DisplayName: "cy", Disabled: true})
+	if _, err := s.Ban(ctx, root, "b", "spam"); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		q    flow.MembersQuery
+		sort string
+		want string
+	}{
+		{flow.MembersQuery{}, flow.SortName, "ann,bob,cy,opal,root"},
+		{flow.MembersQuery{Sort: "nope"}, flow.SortName, "ann,bob,cy,opal,root"},
+		{flow.MembersQuery{Sort: flow.SortName, Desc: true}, flow.SortName, "root,opal,cy,bob,ann"},
+		{flow.MembersQuery{Sort: flow.SortUsername}, flow.SortUsername, "ann,bob,cy,opal,root"},
+		{flow.MembersQuery{Sort: flow.SortEmail}, flow.SortEmail, "opal,ann,bob,cy,root"},
+		{flow.MembersQuery{Sort: flow.SortStatus}, flow.SortStatus, "ann,opal,root,cy,bob"},
+		{flow.MembersQuery{Sort: flow.SortStatus, Desc: true}, flow.SortStatus, "bob,cy,root,opal,ann"},
+		{flow.MembersQuery{Q: "x.org", Sort: flow.SortEmail, Desc: true}, flow.SortEmail, "root,cy,bob,ann,opal"},
+	} {
+		p, err := s.Members(ctx, root, c.q)
+		if err != nil || usernames(p.Rows) != c.want || p.Sort != c.sort || p.Desc != c.q.Desc {
+			t.Errorf("%+v: %s %s %v %v", c.q, usernames(p.Rows), p.Sort, p.Desc, err)
+		}
+	}
+	p, _ := s.Members(ctx, root, flow.MembersQuery{Sort: flow.SortStatus})
+	for _, r := range p.Rows {
+		want := map[string]string{"bob": "banned", "cy": "disabled"}[r.Username]
+		if want == "" {
+			want = "active"
+		}
+		if r.Status() != want {
+			t.Errorf("%s: %s", r.Username, r.Status())
+		}
+	}
+}
+
+// A page outside the list is its nearest page.
+func TestMembersPages(t *testing.T) {
+	s, f, _ := setup(t, true)
+	for i := range 2*flow.MembersPerPage + 9 {
+		n := fmt.Sprintf("u%03d", i)
+		f.Users = append(f.Users, idp.User{ID: n, Username: n, Email: n + "@x.org"})
+	}
+	total := 2*flow.MembersPerPage + 10 // and root
+	for _, c := range []struct{ page, want, rows int }{
+		{0, 1, flow.MembersPerPage}, {-3, 1, flow.MembersPerPage}, {1, 1, flow.MembersPerPage},
+		{2, 2, flow.MembersPerPage}, {3, 3, 10}, {4, 3, 10}, {1 << 40, 3, 10},
+	} {
+		p, err := s.Members(ctx, root, flow.MembersQuery{Sort: flow.SortUsername, Page: c.page})
+		if err != nil || p.Page != c.want || len(p.Rows) != c.rows || p.Pages != 3 || p.Total != total {
+			t.Errorf("page %d: page %d of %d, %d rows of %d, %v", c.page, p.Page, p.Pages, len(p.Rows), p.Total, err)
+		}
+	}
+	p, _ := s.Members(ctx, root, flow.MembersQuery{Sort: flow.SortUsername, Page: 2})
+	// root sorts first, so page 2 starts one short of MembersPerPage.
+	if p.Rows[0].Username != fmt.Sprintf("u%03d", flow.MembersPerPage-1) {
+		t.Errorf("page 2 starts at %s", p.Rows[0].Username)
+	}
+	if p, _ := s.Members(ctx, root, flow.MembersQuery{Q: "zzz", Page: 5}); p.Page != 1 || p.Pages != 1 || len(p.Rows) != 0 {
+		t.Errorf("no match: %+v", p)
 	}
 }
 
@@ -345,6 +419,115 @@ func TestRecoveryRechecksAtApproval(t *testing.T) {
 	}
 	if err := s.ApproveRecovery(ctx, flow.Member{Sub: "b", Username: "bob", Admin: true}, r.ID); !errors.Is(err, flow.ErrSelf) {
 		t.Fatalf("the member approving their own: %v", err)
+	}
+}
+
+var opalM = flow.Member{Sub: "o", Username: "opal", Admin: true}
+
+// soleOperator makes opal, an operator, the admin group's only member.
+func soleOperator(f *idptest.Fake) {
+	people(f)
+	f.Groups["admins"] = []string{"opal"}
+}
+
+// An operator who is the only admin recovers a member at once: there is no
+// second admin to approve it.
+func TestSoleOperatorRecoversAtOnce(t *testing.T) {
+	s, f, m, st := setupStore(t, true)
+	soleOperator(f)
+	if sole, err := s.SoleOperatorAdmin(ctx, opalM); err != nil || !sole {
+		t.Fatalf("%v %v", sole, err)
+	}
+	r, err := s.OpenRecovery(ctx, opalM, "bob", "fresh@x.org", "video call")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.State != "approved" || !r.SoleOperator || r.ApprovedBy != "opal" || r.ApprovedBySub != "o" {
+		t.Fatalf("%+v", r)
+	}
+	if f.User("b").Email != "fresh@x.org" || f.LinksSent != 1 || f.LinksTo[0] != "b" {
+		t.Fatalf("email %q links %v", f.User("b").Email, f.LinksTo)
+	}
+	if got, _ := st.Recovery(ctx, r.ID); got.State != "approved" || !got.SoleOperator || got.ApprovedBy != "opal" {
+		t.Fatalf("recorded %+v", got)
+	}
+	if got, _ := st.AuditSubjects(ctx, "recovery.approve_sole_operator"); len(got) != 1 {
+		t.Fatalf("audit: %v", got)
+	}
+	if n := m.To("opal@x.org"); len(n) != 0 {
+		t.Fatalf("the sole admin was asked for a second admin: %+v", n)
+	}
+	if rows, _ := s.Recoveries(ctx, opalM); len(rows) != 1 || rows[0].Live() {
+		t.Fatalf("%+v", rows)
+	}
+	// The guards still hold.
+	if _, err := s.OpenRecovery(ctx, opalM, "opal", "fresh@x.org", "call"); !errors.Is(err, flow.ErrOperator) {
+		t.Fatal(err)
+	}
+	if _, err := s.OpenRecovery(ctx, opalM, "ann", "opal@x.org", "call"); !errors.Is(err, flow.ErrAddressRefused) {
+		t.Fatalf("taken address: %v", err)
+	}
+	f.SetDisabled(ctx, "a", true)
+	if _, err := s.OpenRecovery(ctx, opalM, "ann", "new.ann@x.org", "call"); !errors.Is(err, flow.ErrMemberBanned) {
+		t.Fatal(err)
+	}
+}
+
+// A sole operator's recovery that fails changes nothing and leaves the
+// member free for another attempt.
+func TestSoleOperatorRecoveryFailureFreesTheMember(t *testing.T) {
+	s, f, _, st := setupStore(t, true)
+	soleOperator(f)
+	f.FailSendLink = errors.New("down")
+	if _, err := s.OpenRecovery(ctx, opalM, "bob", "fresh@x.org", "call"); err == nil {
+		t.Fatal("want the send's failure")
+	}
+	list, _ := st.Recoveries(ctx)
+	if len(list) != 1 || list[0].State != "cancelled" {
+		t.Fatalf("%+v", list)
+	}
+	f.FailSendLink = nil
+	if r, err := s.OpenRecovery(ctx, opalM, "bob", "fresh@x.org", "call"); err != nil || r.State != "approved" {
+		t.Fatalf("retry: %+v %v", r, err)
+	}
+}
+
+// Anyone but an operator who is the only admin opens a request for a second
+// admin, as does an operator when the admin group cannot be read.
+func TestRecoveryNeedsASecondAdminOtherwise(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		admin flow.Member
+		setup func(*idptest.Fake)
+		told  string
+	}{
+		{"operator with another admin", opalM, func(f *idptest.Fake) { people(f); f.Groups["admins"] = []string{"opal", "ann"} }, "ann@x.org"},
+		{"sole admin who is not an operator", ann, func(f *idptest.Fake) { people(f); f.Groups["admins"] = []string{"ann"} }, "ann@x.org"},
+		{"admin group unreadable", opalM, func(f *idptest.Fake) { soleOperator(f); f.FailGroupMembers = errors.New("down") }, "opal@x.org"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s, f, m, _ := setupStore(t, true)
+			c.setup(f)
+			if sole, _ := s.SoleOperatorAdmin(ctx, c.admin); sole {
+				t.Fatal("reads as the sole operator-admin")
+			}
+			r, err := s.OpenRecovery(ctx, c.admin, "bob", "fresh@x.org", "call")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if r.State != "open" || r.SoleOperator {
+				t.Fatalf("%+v", r)
+			}
+			if f.User("b").Email != "bob@x.org" || f.LinksSent != 0 {
+				t.Fatal("recovered without a second admin")
+			}
+			if n := m.To(c.told); len(n) != 1 || n[0].Subject != "A recovery needs a second admin" {
+				t.Fatalf("the admins were not told: %+v", n)
+			}
+			if err := s.ApproveRecovery(ctx, c.admin, r.ID); !errors.Is(err, store.ErrSameAdmin) {
+				t.Fatalf("the opener approving: %v", err)
+			}
+		})
 	}
 }
 

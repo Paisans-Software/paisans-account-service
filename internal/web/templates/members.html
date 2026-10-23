@@ -1,12 +1,26 @@
 {{define "content"}}
 <div class="card"><h1>Members</h1>
 <form method="get" action="/admin/members"><label for="q">Search by username, display name or email</label>
-<input type="text" id="q" name="q" value="{{.Data.Query}}" autocomplete="off">
+<input type="text" id="q" name="q" value="{{.Data.Q}}" autocomplete="off">
+<input type="hidden" name="sort" value="{{.Data.Sort}}">{{if .Data.Desc}}<input type="hidden" name="dir" value="desc">{{end}}
 <p><button>Search</button></p></form>
-{{if .Data.Query}}{{if .Data.Rows}}<table><tr><th>Who</th><th></th></tr>
+{{if .Data.Rows}}<p class="muted">{{.Data.Count}}</p>
+<div class="table-scroll"><table><tr>
+<th aria-sort="{{.Data.AriaSort "name"}}"><a href="{{.Data.SortLink "name"}}">Name{{.Data.Arrow "name"}}</a></th>
+<th aria-sort="{{.Data.AriaSort "username"}}"><a href="{{.Data.SortLink "username"}}">Username{{.Data.Arrow "username"}}</a></th>
+<th aria-sort="{{.Data.AriaSort "email"}}"><a href="{{.Data.SortLink "email"}}">Email{{.Data.Arrow "email"}}</a></th>
+<th aria-sort="{{.Data.AriaSort "status"}}"><a href="{{.Data.SortLink "status"}}">Status{{.Data.Arrow "status"}}</a></th>
+<th></th></tr>
 {{range .Data.Rows}}<tr>
-<td>{{.DisplayName}}<br><span class="muted">{{.Username}} · {{.Email}}{{if .Disabled}} · disabled{{end}}</span></td>
+<td>{{.DisplayName}}</td>
+<td><code>{{.Username}}</code></td>
+<td>{{.Email}}</td>
+<td>{{.Status}}</td>
 <td><a href="/admin/members/{{.ID}}/groups">Groups</a> · {{if .Operator}}<span class="muted">Operator</span>{{else if .Self}}<span class="muted">You</span>{{else if .Ban}}<a href="/admin/bans">Banned</a>{{else}}<form class="inline" method="get" action="/admin/members/{{.ID}}/ban"><button class="destructive">Ban</button></form>{{end}}</td>
-</tr>{{end}}</table>{{else}}<p class="muted">Nobody matches.</p>{{end}}{{end}}
+</tr>{{end}}</table></div>
+{{if gt .Data.Pages 1}}<nav class="pager">{{with .Data.PrevLink}}<a href="{{.}}">Previous</a>{{end}}
+<span class="muted">Page {{.Data.Page}} of {{.Data.Pages}}</span>
+{{with .Data.NextLink}}<a href="{{.}}">Next</a>{{end}}</nav>{{end}}
+{{else if .Data.Q}}<p class="muted">Nobody matches.</p>{{else}}<p class="muted">There are no members yet.</p>{{end}}
 </div>
 {{end}}

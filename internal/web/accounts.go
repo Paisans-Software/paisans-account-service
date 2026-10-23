@@ -4,6 +4,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strconv"
 
 	"github.com/paisans-software/paisans-account-service/internal/flow"
@@ -49,6 +50,7 @@ var done = map[string]string{
 	"lifted":    "The ban is lifted and the member can sign in again.",
 	"opened":    "The request is open. Another admin must approve it within 48 hours.",
 	"approved":  "The new address is set and Pocket ID has emailed a sign-in link to it.",
+	"recovered": "The account is recovered: the new address is set and Pocket ID has emailed a sign-in link to it.",
 	"cancelled": "The request is cancelled.",
 	"email":     "Your email address is changed.",
 	"name":      "Your name is changed.",
@@ -61,19 +63,106 @@ func (s *server) id(r *http.Request) (int64, bool) {
 
 // --- members and bans ---
 
-type membersData struct {
-	Query string
-	Rows  []flow.MemberRow
+// membersData is one page of the members list, with the links that sort and
+// page it built from the query as applied, so a link never carries a value
+// the flow refused.
+type membersData struct{ flow.MembersPage }
+
+// link is the members list with q, sorted by column, desc and at page, each
+// left out when it is the default.
+func (d membersData) link(column string, desc bool, page int) string {
+	v := url.Values{}
+	if d.Q != "" {
+		v.Set("q", d.Q)
+	}
+	if column != flow.SortName {
+		v.Set("sort", column)
+	}
+	if desc {
+		v.Set("dir", "desc")
+	}
+	if page > 1 {
+		v.Set("page", strconv.Itoa(page))
+	}
+	if len(v) == 0 {
+		return "/admin/members"
+	}
+	return "/admin/members?" + v.Encode()
 }
 
+// SortLink sorts by column from the first page: ascending, or reversed if it
+// is the column already sorted ascending.
+func (d membersData) SortLink(column string) string {
+	return d.link(column, column == d.Sort && !d.Desc, 1)
+}
+
+// AriaSort is column's aria-sort value.
+func (d membersData) AriaSort(column string) string {
+	switch {
+	case column != d.Sort:
+		return "none"
+	case d.Desc:
+		return "descending"
+	}
+	return "ascending"
+}
+
+// Arrow marks the sorted column's header with its direction.
+func (d membersData) Arrow(column string) string {
+	switch {
+	case column != d.Sort:
+		return ""
+	case d.Desc:
+		return " ↓"
+	}
+	return " ↑"
+}
+
+// PrevLink and NextLink are the neighbouring pages, or "" at either end.
+func (d membersData) PrevLink() string {
+	if d.Page <= 1 {
+		return ""
+	}
+	return d.link(d.Sort, d.Desc, d.Page-1)
+}
+
+func (d membersData) NextLink() string {
+	if d.Page >= d.Pages {
+		return ""
+	}
+	return d.link(d.Sort, d.Desc, d.Page+1)
+}
+
+// Count says how many members the list holds, or how many match a search.
+func (d membersData) Count() string {
+	n := strconv.Itoa(d.Total)
+	switch {
+	case d.Q == "" && d.Total == 1:
+		return "1 member"
+	case d.Q == "":
+		return n + " members"
+	case d.Total == 1:
+		return "1 member matches"
+	}
+	return n + " members match"
+}
+
+// members lists every user, or those matching q, sorted by sort and dir and
+// cut to page. An unknown sort or a page that is not a number is the
+// default; the flow clamps the rest.
 func (s *server) members(w http.ResponseWriter, r *http.Request, sess Session) {
-	q := r.URL.Query().Get("q")
-	rows, err := s.Flow.SearchMembers(r.Context(), sess.member(), q)
+	v := r.URL.Query()
+	page, err := strconv.Atoi(v.Get("page"))
+	if err != nil {
+		page = 1
+	}
+	p, err := s.Flow.Members(r.Context(), sess.member(), flow.MembersQuery{
+		Q: v.Get("q"), Sort: v.Get("sort"), Desc: v.Get("dir") == "desc", Page: page})
 	if err != nil {
 		s.fail(w, err)
 		return
 	}
-	s.Render.page(w, 200, "members.html", view{Title: "Members", Session: &sess, CSRF: sess.CSRF, Data: membersData{Query: q, Rows: rows}})
+	s.Render.page(w, 200, "members.html", view{Title: "Members", Session: &sess, CSRF: sess.CSRF, Data: membersData{p}})
 }
 
 type banData struct {
@@ -193,6 +282,9 @@ type recoveryData struct {
 	Rows                    []flow.RecoveryRow
 	Username, Email, Reason string
 	Sub                     string
+	// Immediate is a viewer who is the sole operator-admin: their recovery
+	// happens on submit, with no second admin.
+	Immediate bool
 }
 
 func (s *server) recoveryView(w http.ResponseWriter, r *http.Request, sess Session, status int, errText string, d recoveryData) {
@@ -202,6 +294,9 @@ func (s *server) recoveryView(w http.ResponseWriter, r *http.Request, sess Sessi
 		return
 	}
 	d.Rows, d.Sub = rows, sess.Sub
+	// A failed read shows the two-admin wording, which is what opening a
+	// request then does.
+	d.Immediate, _ = s.Flow.SoleOperatorAdmin(r.Context(), sess.member())
 	if errText == "" {
 		errText = errorCodes[r.URL.Query().Get("error")]
 	}
@@ -215,13 +310,17 @@ func (s *server) recoveryPage(w http.ResponseWriter, r *http.Request, sess Sessi
 
 func (s *server) recoveryOpen(w http.ResponseWriter, r *http.Request, sess Session) {
 	d := recoveryData{Username: r.PostFormValue("username"), Email: r.PostFormValue("email"), Reason: r.PostFormValue("reason")}
-	_, err := s.Flow.OpenRecovery(r.Context(), sess.member(), d.Username, d.Email, d.Reason)
+	rq, err := s.Flow.OpenRecovery(r.Context(), sess.member(), d.Username, d.Email, d.Reason)
 	if msg := userError(err); msg != "" {
 		s.recoveryView(w, r, sess, http.StatusUnprocessableEntity, msg, d)
 		return
 	}
 	if err != nil {
 		s.fail(w, err)
+		return
+	}
+	if rq.State == "approved" {
+		http.Redirect(w, r, "/admin/recovery?done=recovered", http.StatusSeeOther)
 		return
 	}
 	http.Redirect(w, r, "/admin/recovery?done=opened", http.StatusSeeOther)

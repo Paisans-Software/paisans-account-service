@@ -3,6 +3,7 @@ package idptest
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"sort"
@@ -22,6 +23,10 @@ type Fake struct {
 	FailCreate, FailSendLink error
 	// FailLookup makes every read fail, as an unreachable provider would.
 	FailLookup error
+	// FailGetUser makes GetUser alone fail.
+	FailGetUser error
+	// FailGroupMembers makes GroupMembers alone fail.
+	FailGroupMembers error
 	// FailUpdate makes every update fail.
 	FailUpdate error
 	// LinksTo lists the user IDs each sign-in link was sent to, in order.
@@ -48,6 +53,11 @@ type Fake struct {
 	FailGroupReadBack error
 	// GroupWrites counts the group writes ChangeGroups made.
 	GroupWrites int
+	// Clients are the provider's OIDC clients, as ListClients returns them.
+	Clients []idp.Client
+	// FailClients makes ListClients fail, and nothing else. FailLookup fails
+	// it too, with every other read.
+	FailClients bool
 }
 
 func (f *Fake) UsernameTaken(_ context.Context, n string) (bool, error) {
@@ -94,6 +104,30 @@ func (f *Fake) AdminGroupEmails(_ context.Context, group string) ([]string, erro
 		for _, u := range f.Users {
 			if u.Username == name && u.Email != "" {
 				out = append(out, u.Email)
+			}
+		}
+	}
+	return out, nil
+}
+
+func (f *Fake) GroupMembers(_ context.Context, group string) ([]idp.User, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.FailLookup != nil {
+		return nil, f.FailLookup
+	}
+	if f.FailGroupMembers != nil {
+		return nil, f.FailGroupMembers
+	}
+	members, ok := f.Groups[group]
+	if !ok {
+		return nil, fmt.Errorf("identity provider: no group named %q", group)
+	}
+	out := []idp.User{}
+	for _, name := range members {
+		for _, u := range f.Users {
+			if u.Username == name {
+				out = append(out, u)
 			}
 		}
 	}
@@ -154,6 +188,9 @@ func (f *Fake) GetUser(_ context.Context, id string) (idp.User, error) {
 	defer f.mu.Unlock()
 	if f.FailLookup != nil {
 		return idp.User{}, f.FailLookup
+	}
+	if f.FailGetUser != nil {
+		return idp.User{}, f.FailGetUser
 	}
 	for _, u := range f.Users {
 		if u.ID == id {
@@ -260,6 +297,18 @@ func (f *Fake) UserGroups(_ context.Context, id string) ([]idp.Group, error) {
 	}
 	gs, _, err := f.userGroups(id)
 	return gs, err
+}
+
+func (f *Fake) ListClients(context.Context) ([]idp.Client, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.FailLookup != nil {
+		return nil, f.FailLookup
+	}
+	if f.FailClients {
+		return nil, errors.New("identity provider: the clients cannot be listed")
+	}
+	return slices.Clone(f.Clients), nil
 }
 
 // In reports whether the user named username is in the group named group.

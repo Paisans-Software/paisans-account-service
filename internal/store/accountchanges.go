@@ -89,15 +89,18 @@ type Recovery struct {
 	ApprovedBySub, ApprovedBy  string
 	State                      string
 	OpenedAt, ExpiresAt        time.Time
+	// SoleOperator is a request its opener completed alone, as the only
+	// admin and an operator: ApprovedBy is the opener.
+	SoleOperator bool
 }
 
 const recoveryColumns = `id, idp_user_id, username, new_email, reason, opened_by_sub, opened_by_username,
-	COALESCE(approved_by_sub,''), COALESCE(approved_by_username,''), state, opened_at, expires_at`
+	COALESCE(approved_by_sub,''), COALESCE(approved_by_username,''), state, opened_at, expires_at, sole_operator`
 
 func scanRecovery(r pgx.Row) (Recovery, error) {
 	var x Recovery
 	err := r.Scan(&x.ID, &x.UserID, &x.Username, &x.NewEmail, &x.Reason, &x.OpenedBySub, &x.OpenedBy,
-		&x.ApprovedBySub, &x.ApprovedBy, &x.State, &x.OpenedAt, &x.ExpiresAt)
+		&x.ApprovedBySub, &x.ApprovedBy, &x.State, &x.OpenedAt, &x.ExpiresAt, &x.SoleOperator)
 	return x, err
 }
 
@@ -125,24 +128,66 @@ func (s *Store) OpenRecovery(ctx context.Context, r Recovery) (Recovery, error) 
 	return out, err
 }
 
+// OpenSoleOperatorRecovery records a recovery request already claimed by its
+// opener, who is the only admin and an operator and completes it alone: it
+// is never open for a second admin. CompleteRecovery records it done; a
+// failure is AbandonSoleOperatorRecovery. A user who already has a request
+// open is ErrBusy.
+func (s *Store) OpenSoleOperatorRecovery(ctx context.Context, r Recovery) (Recovery, error) {
+	var out Recovery
+	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+		var err error
+		out, err = scanRecovery(tx.QueryRow(ctx, `INSERT INTO recovery_requests
+			(idp_user_id, username, new_email, reason, opened_by_sub, opened_by_username, opened_at, expires_at, state, claimed_at, sole_operator)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'approving',$7,true) RETURNING `+recoveryColumns,
+			r.UserID, r.Username, r.NewEmail, r.Reason, r.OpenedBySub, r.OpenedBy, r.OpenedAt, r.ExpiresAt))
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == "recovery_live_user" {
+			return ErrBusy
+		}
+		if err != nil {
+			return err
+		}
+		return auditTx(ctx, tx, r.OpenedBySub, "recovery.open_sole_operator", recoverySubject(out))
+	})
+	return out, err
+}
+
+// AbandonSoleOperatorRecovery cancels a sole operator's request whose
+// recovery failed, so the member is free for another.
+func (s *Store) AbandonSoleOperatorRecovery(ctx context.Context, id int64) error {
+	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+		r, err := scanRecovery(tx.QueryRow(ctx, `UPDATE recovery_requests SET state='cancelled', closed_at=now(), closed_by_sub=opened_by_sub
+			WHERE id=$1 AND state='approving' AND sole_operator RETURNING `+recoveryColumns, id))
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		if err != nil {
+			return err
+		}
+		return auditTx(ctx, tx, r.OpenedBySub, "recovery.cancel", recoverySubject(r))
+	})
+}
+
 // ClaimRecovery takes an open, unexpired request for one approval by an admin
 // other than its opener. Its opener is ErrSameAdmin; a request being approved
 // by another is ErrBusy until that claim is ten minutes old; anything else
-// (expired, cancelled, approved, gone) is ErrNotFound.
+// (expired, cancelled, approved, a sole operator's, gone) is ErrNotFound.
 func (s *Store) ClaimRecovery(ctx context.Context, id int64, approverSub string, now time.Time) (Recovery, error) {
 	var r Recovery
 	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
 		var err error
 		r, err = scanRecovery(tx.QueryRow(ctx, `UPDATE recovery_requests SET state='approving', claimed_at=$3
-			WHERE id=$1 AND opened_by_sub<>$2 AND expires_at > $3
+			WHERE id=$1 AND opened_by_sub<>$2 AND expires_at > $3 AND NOT sole_operator
 			AND (state='open' OR (state='approving' AND claimed_at < $4))
 			RETURNING `+recoveryColumns, id, approverSub, now, now.Add(-claimTimeout)))
 		if errors.Is(err, pgx.ErrNoRows) {
 			var opener, state string
 			var expires time.Time
-			err := tx.QueryRow(ctx, `SELECT opened_by_sub, state, expires_at FROM recovery_requests WHERE id=$1`, id).Scan(&opener, &state, &expires)
+			var sole bool
+			err := tx.QueryRow(ctx, `SELECT opened_by_sub, state, expires_at, sole_operator FROM recovery_requests WHERE id=$1`, id).Scan(&opener, &state, &expires, &sole)
 			switch {
-			case errors.Is(err, pgx.ErrNoRows):
+			case errors.Is(err, pgx.ErrNoRows), sole:
 				return ErrNotFound
 			case err != nil:
 				return err
@@ -167,7 +212,8 @@ func (s *Store) ReleaseRecovery(ctx context.Context, id int64) error {
 	return err
 }
 
-// CompleteRecovery records a claimed request as approved.
+// CompleteRecovery records a claimed request as approved: by a second admin,
+// or by its opener alone for a sole operator's request.
 func (s *Store) CompleteRecovery(ctx context.Context, id int64, approverSub, approver string) error {
 	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
 		r, err := scanRecovery(tx.QueryRow(ctx, `UPDATE recovery_requests
@@ -179,7 +225,11 @@ func (s *Store) CompleteRecovery(ctx context.Context, id int64, approverSub, app
 		if err != nil {
 			return err
 		}
-		return auditTx(ctx, tx, approverSub, "recovery.approve", recoverySubject(r))
+		action := "recovery.approve"
+		if r.SoleOperator {
+			action = "recovery.approve_sole_operator"
+		}
+		return auditTx(ctx, tx, approverSub, action, recoverySubject(r))
 	})
 }
 

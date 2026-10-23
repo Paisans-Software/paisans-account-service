@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/paisans-software/paisans-account-service/internal/config"
+	"github.com/paisans-software/paisans-account-service/internal/flow"
 	"github.com/paisans-software/paisans-account-service/internal/idp"
 )
 
@@ -42,7 +44,7 @@ func TestRegisterThroughTheJoinHost(t *testing.T) {
 		t.Fatal("no code of conduct")
 	}
 	rec := post(h, "/", f)
-	if rec.Code != 200 || !strings.Contains(rec.Body.String(), "<h1>Thanks for applying</h1>") {
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), "<h1>Thanks for asking to join</h1>") {
 		t.Fatalf("%d %s", rec.Code, rec.Body.String())
 	}
 	if body := h.as(admin, "GET", "/admin", nil).Body.String(); !strings.Contains(body, "registered") || strings.Contains(body, "invited by") {
@@ -266,6 +268,37 @@ func TestRecoveryThroughThePages(t *testing.T) {
 	}
 }
 
+// An operator who is the only admin is told the recovery happens on submit,
+// and it does; anyone else sees the two-admin wording.
+func TestSoleOperatorRecoveryThroughThePages(t *testing.T) {
+	h := newHarness(t, true)
+	h.fake.Groups["admins"] = []string{"opal"}
+	const now = "the recovery happens as soon as you submit"
+	if body := h.as(opal, "GET", "/admin/recovery", nil).Body.String(); !strings.Contains(body, now) || strings.Contains(body, "Another admin must approve") {
+		t.Fatalf("sole operator-admin page: %s", body)
+	}
+	rec := h.as(opal, "POST", "/admin/recovery", url.Values{"csrf": {"tok"}, "username": {"alice"}, "email": {"fresh@x.org"}, "reason": {"video call"}})
+	if rec.Header().Get("Location") != "/admin/recovery?done=recovered" || h.fake.User("s-alice").Email != "fresh@x.org" || h.fake.LinksSent != 1 {
+		t.Fatalf("%d %s", rec.Code, rec.Header().Get("Location"))
+	}
+	if len(h.mail.To("opal@x.org")) != 0 {
+		t.Fatal("the sole admin was asked for a second admin")
+	}
+	body := h.as(opal, "GET", "/admin/recovery?done=recovered", nil).Body.String()
+	if !strings.Contains(body, "The account is recovered") || !strings.Contains(body, "recovered by opal alone, as the sole operator-admin") {
+		t.Fatalf("after: %s", body)
+	}
+
+	h.fake.Groups["admins"] = []string{"opal", "root"}
+	if body := h.as(opal, "GET", "/admin/recovery", nil).Body.String(); strings.Contains(body, now) || !strings.Contains(body, "Another admin must approve") {
+		t.Fatalf("operator with another admin: %s", body)
+	}
+	h.fake.Groups["admins"] = []string{"root"}
+	if body := h.as(admin, "GET", "/admin/recovery", nil).Body.String(); strings.Contains(body, now) {
+		t.Fatalf("sole admin who is not an operator: %s", body)
+	}
+}
+
 // Code entry is limited per client address, beyond the attempts each change
 // allows.
 func TestCodeEntryIsRateLimited(t *testing.T) {
@@ -286,5 +319,122 @@ func TestCodeEntryIsRateLimited(t *testing.T) {
 	}
 	if !limited {
 		t.Fatal("never limited")
+	}
+}
+
+// memberRowRE matches a members table row's username cell.
+var memberRowRE = regexp.MustCompile(`<td><code>([^<]*)</code></td>`)
+
+// rowOrder is the order the members table lists the usernames in.
+func rowOrder(body string) string {
+	var got []string
+	for _, m := range memberRowRE.FindAllStringSubmatch(body, -1) {
+		got = append(got, m[1])
+	}
+	return strings.Join(got, ",")
+}
+
+// With no query the members page lists everyone, by name, with each row's
+// status.
+func TestMembersPageListsEveryone(t *testing.T) {
+	h := newHarness(t, true)
+	h.fake.Users = append(h.fake.Users, idp.User{ID: "s-dan", Username: "dan", Email: "dan@x.org", DisplayName: "Dan", Disabled: true})
+	if _, err := h.flow.Ban(context.Background(), admin.member(), "s-alice", "spam"); err != nil {
+		t.Fatal(err)
+	}
+	rec := h.as(admin, "GET", "/admin/members", nil)
+	body := rec.Body.String()
+	if rec.Code != 200 || rowOrder(body) != "alice,dan,opal,root" {
+		t.Fatalf("%d %s\n%s", rec.Code, rowOrder(body), body)
+	}
+	for _, want := range []string{
+		`<td>banned</td>`, `<td>disabled</td>`, `<td>active</td>`, `<a href="/admin/bans">Banned</a>`,
+		`<span class="muted">Operator</span>`, `<span class="muted">You</span>`, `action="/admin/members/s-dan/ban"`,
+		`<th aria-sort="ascending"><a href="/admin/members?dir=desc">Name ↑</a></th>`,
+		`<th aria-sort="none"><a href="/admin/members?sort=status">Status</a></th>`,
+		`4 members`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("lacks %s", want)
+		}
+	}
+	if strings.Contains(body, `class="pager"`) {
+		t.Error("one page has a pager")
+	}
+}
+
+// A column's header sorts by it, and again reverses it; the search, and the
+// sort in the search form, are kept. Unknown values are the defaults.
+func TestMembersPageSorts(t *testing.T) {
+	h := newHarness(t, true)
+	h.fake.Users[0].Email = "z-root@x.org"
+	for path, want := range map[string]string{
+		"/admin/members?sort=email":                    "alice,opal,root",
+		"/admin/members?sort=email&dir=desc":           "root,opal,alice",
+		"/admin/members?sort=username&dir=desc":        "root,opal,alice",
+		"/admin/members?q=L&sort=username&dir=desc":    "opal,alice",
+		"/admin/members?q=l&sort=status&dir=sideways":  "alice,opal",
+		"/admin/members?sort=joined&dir=desc":          "root,opal,alice",
+		"/admin/members?sort=%3Cscript%3E&page=banana": "alice,opal,root",
+	} {
+		rec := h.as(admin, "GET", path, nil)
+		if got := rowOrder(rec.Body.String()); rec.Code != 200 || got != want {
+			t.Errorf("%s: %d %s", path, rec.Code, got)
+		}
+	}
+	body := h.as(admin, "GET", "/admin/members?q=l&sort=username&dir=desc", nil).Body.String()
+	for _, want := range []string{
+		`<th aria-sort="descending"><a href="/admin/members?q=l&amp;sort=username">Username ↓</a></th>`,
+		`<th aria-sort="none"><a href="/admin/members?q=l&amp;sort=email">Email</a></th>`,
+		`<th aria-sort="none"><a href="/admin/members?q=l">Name</a></th>`,
+		`<input type="hidden" name="sort" value="username">`, `<input type="hidden" name="dir" value="desc">`,
+		`value="l"`, `2 members match`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("lacks %s", want)
+		}
+	}
+	if body := h.as(admin, "GET", "/admin/members?q=zzz", nil).Body.String(); !strings.Contains(body, "Nobody matches.") {
+		t.Errorf("no match: %s", body)
+	}
+}
+
+// Pages beyond either end show the nearest page; the links keep the search
+// and the sort.
+func TestMembersPagePages(t *testing.T) {
+	h := newHarness(t, true)
+	for i := range 2 * flow.MembersPerPage {
+		n := fmt.Sprintf("u%03d", i)
+		h.fake.Users = append(h.fake.Users, idp.User{ID: "s-" + n, Username: n, Email: n + "@x.org"})
+	}
+	// All 103 match, so sorted by username: alice, opal, root, u000, ...
+	first := "/admin/members?q=x.org&amp;sort=username"
+	second := "/admin/members?page=2&amp;q=x.org&amp;sort=username"
+	third := "/admin/members?page=3&amp;q=x.org&amp;sort=username"
+	for _, c := range []struct{ page, first, prev, next string }{
+		{"", "alice", "", second},
+		{"1", "alice", "", second},
+		{"0", "alice", "", second},
+		{"-1", "alice", "", second},
+		{"99999999999999999999", "alice", "", second},
+		{"2", "u047", first, third},
+		{"3", "u097", second, ""},
+		{"4", "u097", second, ""},
+	} {
+		rec := h.as(admin, "GET", "/admin/members?q=x.org&sort=username&page="+c.page, nil)
+		body := rec.Body.String()
+		rows := strings.Split(rowOrder(body), ",")
+		if rec.Code != 200 || rows[0] != c.first {
+			t.Errorf("page %q: %d starts at %s", c.page, rec.Code, rows[0])
+		}
+		for _, l := range []struct{ name, href string }{{"Previous", c.prev}, {"Next", c.next}} {
+			link := `<a href="` + l.href + `">` + l.name + `</a>`
+			if has := strings.Contains(body, ">"+l.name+"</a>"); has != (l.href != "") || (has && !strings.Contains(body, link)) {
+				t.Errorf("page %q: want %q", c.page, link)
+			}
+		}
+		if !strings.Contains(body, "103 members match") || !strings.Contains(body, " of 3") {
+			t.Errorf("page %q: no count", c.page)
+		}
 	}
 }

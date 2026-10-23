@@ -133,7 +133,8 @@ p { margin: 0 0 1rem; }
 .brand img { height: 2rem; width: auto; max-width: 8rem; }
 .brand-sep { width: 1px; height: 1.25rem; margin: 0 .75rem 0 .5rem; background: oklch(0.439 0 0); }
 .brand-name { font-family: 'Gloock', serif; font-size: 1.5rem; line-height: 2rem; }
-.who { color: var(--muted-foreground); font-size: .875rem; }
+.who { color: var(--muted-foreground); font-size: .875rem; display: flex; align-items: center; gap: .75rem; }
+.who form.inline { margin: 0; }
 @media (min-width: 48rem) { .topbar-inner { padding: 0 2.5rem; } }
 
 /* routes/settings/+layout.svelte */
@@ -245,7 +246,28 @@ code, input#username { font-family: ui-monospace, SFMono-Regular, Menlo, Consola
 code { font-size: .8125rem; padding: .125rem .375rem; border-radius: var(--radius-md);
 	background: color-mix(in oklab, var(--input) 50%, transparent); }
 
+/* The Your apps card: a tile per app, after Pocket ID's dashboard */
+.apps { display: grid; grid-template-columns: repeat(auto-fill, minmax(9rem, 1fr)); gap: .75rem; }
+.app-tile { display: flex; flex-direction: column; align-items: center; gap: .5rem; min-width: 0; padding: 1rem .75rem;
+	text-align: center; text-decoration: none; color: var(--foreground); border: 1px solid var(--border); border-radius: var(--radius-3xl);
+	transition: all .15s; }
+.app-tile:hover { background: color-mix(in oklab, var(--muted) 70%, transparent); transform: translateY(-2px); box-shadow: var(--shadow-sm); }
+.app-tile picture { display: contents; }
+.app-tile img, .app-letter { width: 3rem; height: 3rem; border-radius: var(--radius-2xl); }
+.app-tile img { object-fit: contain; }
+.app-letter { display: flex; align-items: center; justify-content: center; font-size: 1.25rem; font-weight: 600; background: var(--muted); }
+.app-tile b, .app-tile .muted { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.app-tile b { font-weight: 500; }
+
 /* The invite link and its copy button */
 .copy-row { display: flex; gap: .5rem; align-items: center; margin-bottom: 1rem; }
 .link { flex: 1; min-width: 0; margin: 0; padding: .5rem .75rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 	word-break: break-all; background: color-mix(in oklab, var(--input) 50%, transparent); border-radius: var(--radius-3xl); }
+
+/* The members list: a wide table scrolls inside its card, and its headers sort it */
+.table-scroll { overflow-x: auto; margin-bottom: 1rem; }
+.table-scroll td { white-space: nowrap; }
+th a { text-decoration: none; }
+th a:hover { text-decoration: underline; }
+.pager { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+.pager .muted { flex: 1; text-align: center; }

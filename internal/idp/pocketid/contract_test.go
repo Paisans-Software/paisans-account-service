@@ -78,6 +78,10 @@ func TestContract(t *testing.T) {
 	if err != nil || len(admins) != 1 || admins[0] != name+"@example.org" {
 		t.Fatalf("admin group emails: %v %v", admins, err)
 	}
+	members, err := c.GroupMembers(ctx, "admins")
+	if err != nil || len(members) != 1 || members[0].ID != u.ID {
+		t.Fatalf("admin group members: %+v %v", members, err)
+	}
 
 	if err := c.SendLoginLink(ctx, u.ID); err != nil {
 		t.Fatal(err)

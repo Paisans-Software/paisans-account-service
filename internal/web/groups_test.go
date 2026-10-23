@@ -91,13 +91,16 @@ func TestGroupsSave(t *testing.T) {
 	if rec.Code != 200 || h.fake.In("opal", "admins") || !h.fake.In("opal", "operators") {
 		t.Fatalf("%d %s", rec.Code, rec.Body.String())
 	}
-	// An admin removes their own admins.
+	if rec := h.as(admin, "POST", "/admin/members/s-alice/groups", groupsForm([]string{"wiki", "admins"}, []string{"wiki", "admins"})); rec.Code != 422 || !strings.Contains(rec.Body.String(), "No group was changed.") {
+		t.Fatalf("no change: %d %s", rec.Code, rec.Body.String())
+	}
+	// An admin removes their own admins, and is no admin from the next request.
 	rec = h.as(admin, "POST", "/admin/members/s-root/groups", groupsForm([]string{"members"}, []string{"members", "admins"}))
 	if rec.Code != 200 || h.fake.In("root", "admins") {
 		t.Fatalf("self: %d %s", rec.Code, rec.Body.String())
 	}
-	if rec := h.as(admin, "POST", "/admin/members/s-alice/groups", groupsForm([]string{"wiki", "admins"}, []string{"wiki", "admins"})); rec.Code != 422 || !strings.Contains(rec.Body.String(), "No group was changed.") {
-		t.Fatalf("no change: %d %s", rec.Code, rec.Body.String())
+	if rec := h.as(admin, "GET", "/admin/members/s-alice/groups", nil); rec.Code != 403 {
+		t.Fatalf("after self-removal: %d", rec.Code)
 	}
 }
 

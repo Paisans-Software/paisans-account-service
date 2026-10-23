@@ -39,7 +39,7 @@ var pidTypes = map[string]bool{"Client": true, "User": true, "NewUser": true, "U
 
 // pidReads are the shared client's methods that only read; any function may
 // call them.
-var pidReads = map[string]bool{"Users": true, "User": true, "FindGroup": true, "Groups": true, "OIDCClients": true, "OIDCClientByID": true}
+var pidReads = map[string]bool{"Users": true, "User": true, "FindGroup": true, "Groups": true, "OIDCClients": true}
 
 // pidWrites is each shared-client method that writes, and the functions that
 // may call it, each exactly once.
@@ -1075,13 +1075,12 @@ func checkChangeGroupsFunc(t *testing.T, fn *ast.FuncDecl) {
 // approvedRoutes are every request the service may make at Pocket ID, by
 // method and route, with :id for a path segment. Groups is the GET of
 // /api/user-groups; UpdateUser is a GET and a PUT of /api/users/:id;
-// OIDCClients and OIDCClientByID are GETs of /api/oidc/clients.
+// OIDCClients is the GET of /api/oidc/clients.
 var approvedRoutes = map[string]bool{
 	"GET /api/users":                            true,
 	"GET /api/users/:id":                        true,
 	"GET /api/user-groups":                      true,
 	"GET /api/oidc/clients":                     true,
-	"GET /api/oidc/clients/:id":                 true,
 	"POST /api/users":                           true,
 	"POST /api/users/:id/one-time-access-email": true,
 	"PUT /api/users/:id":                        true,
@@ -1148,7 +1147,6 @@ func TestWriteSurfaceOnTheWire(t *testing.T) {
 		update  = user1 + ";PUT /api/users/:id"
 		setGrps = "PUT /api/users/:id/user-groups"
 		clients = "GET /api/oidc/clients"
-		client1 = "GET /api/oidc/clients/:id"
 	)
 	for _, m := range []struct {
 		name     string
@@ -1164,7 +1162,7 @@ func TestWriteSurfaceOnTheWire(t *testing.T) {
 		{"GetUser", user1, func() error { _, err := c.GetUser(ctx, "u1"); return err }},
 		{"ListGroups", groups, func() error { _, err := c.ListGroups(ctx); return err }},
 		{"UserGroups", user1, func() error { _, err := c.UserGroups(ctx, "u1"); return err }},
-		{"ListClients", clients + ";" + client1, func() error { _, err := c.ListClients(ctx); return err }},
+		{"ListClients", clients, func() error { _, err := c.ListClients(ctx); return err }},
 		{"CreateUser", "POST /api/users", func() error {
 			_, err := c.CreateUser(ctx, idp.NewUser{Username: "ann", Email: "ann@x.org", DisplayName: "Ann"})
 			return err

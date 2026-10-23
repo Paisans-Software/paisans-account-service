@@ -54,9 +54,8 @@ type GroupChange struct{ Added, Removed []Group }
 
 // Client is one of the provider's OIDC clients, an app a member signs in to.
 // LaunchURL is "" when the client has none. AllowedGroupIDs are the groups a
-// Restricted client admits, read only when it has a launch URL; an
-// unrestricted client admits everyone. HasLogo and HasDarkLogo say which of
-// its light and dark logos Pocket ID has.
+// Restricted client admits; an unrestricted client admits everyone. HasLogo
+// and HasDarkLogo say which of its light and dark logos Pocket ID has.
 type Client struct {
 	ID, Name, LaunchURL              string
 	HasLogo, HasDarkLogo, Restricted bool

@@ -12,7 +12,7 @@ paisans-account-service is the community's account service, a small Go service r
 
 Every admin action is an audit entry. No log line carries an address or a code.
 
-It calls Pocket ID's API through [pocketid-go](https://github.com/Paisans-Software/pocketid-go), the client the Paisans CLI uses, and only through it. The key goes only to a private address: loopback, RFC 1918, RFC 6598, IPv6 unique local, a network in `ACCOUNT_IDP_PRIVATE_NETWORKS`, or a hostname without a dot. A hostname with a dot is refused even when it resolves to a private address. A redirect from Pocket ID is an error and is never followed.
+It calls Pocket ID's API through [pocketid-go](https://github.com/Paisans-Software/pocketid-go), the client the Paisans CLI uses, and only through it. It needs Pocket ID 2.18 or newer. The key goes only to a private address: loopback, RFC 1918, RFC 6598, IPv6 unique local, a network in `ACCOUNT_IDP_PRIVATE_NETWORKS`, or a hostname without a dot. A hostname with a dot is refused even when it resolves to a private address. A redirect from Pocket ID is an error and is never followed.
 
 It answers on two hosts, each registering only its own routes; a route requested on the other host is a 404:
 

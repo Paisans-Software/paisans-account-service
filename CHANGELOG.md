@@ -14,6 +14,7 @@ All notable changes to this project are documented here, in the
 
 ### Changed
 
+- Pocket ID 2.18 or newer is required. The Your apps card reads each app's allowed groups from Pocket ID's client list, which older versions leave out.
 - An operator who is the only admin recovers an account at once, recorded as theirs alone. A recovery needed a second admin's approval, so a single-admin deployment could never recover anyone.
 - The admin queue of people waiting to join is called Invite Requests. Pages, errors and emails that said application say request to join, in both signup modes.
 

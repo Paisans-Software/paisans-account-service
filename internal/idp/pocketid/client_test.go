@@ -416,41 +416,32 @@ func TestCallsTakeTheCallersContext(t *testing.T) {
 	}
 }
 
-// ListClients lists every client and reads each restricted one with a launch
-// URL by ID for its allowed groups, which a list entry may leave out; a
-// client gone between the two reads is skipped, and nothing is written.
-func TestListClientsReadsGroupsByID(t *testing.T) {
+// ListClients lists every client, all pages, with the allowed groups the list
+// gives, makes no other request, and writes nothing.
+func TestListClientsReadsTheList(t *testing.T) {
 	launch := func(s string) any { return s }
 	list := []map[string]any{
 		{"id": "open", "name": "Open", "launchURL": launch("https://open.example.org"), "hasLogo": true},
 		{"id": "night", "name": "Night", "launchURL": launch("https://night.example.org"), "hasDarkLogo": true},
-		{"id": "wiki", "name": "Wiki", "launchURL": launch("https://wiki.example.org"), "isGroupRestricted": true},
-		{"id": "gone", "name": "Gone", "launchURL": launch("https://gone.example.org"), "isGroupRestricted": true},
+		{"id": "wiki", "name": "Wiki", "launchURL": launch("https://wiki.example.org"), "isGroupRestricted": true,
+			"allowedUserGroups": []any{map[string]any{"id": "g-members", "name": "members"}, map[string]any{"id": "g-wiki", "name": "wiki"}}},
 		{"id": "hidden", "name": "Hidden", "launchURL": nil, "isGroupRestricted": true},
 		{"id": "blank", "name": "Blank", "launchURL": launch(""), "isGroupRestricted": true},
-	}
-	byID := map[string]map[string]any{
-		"wiki": {"id": "wiki", "name": "Wiki", "launchURL": "https://wiki.example.org", "isGroupRestricted": true,
-			"allowedUserGroups": []any{map[string]any{"id": "g-members", "name": "members"}, map[string]any{"id": "g-wiki", "name": "wiki"}}},
 	}
 	var calls []call
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls = append(calls, call{Method: r.Method, Path: r.URL.Path, Key: r.Header.Get("X-API-Key")})
-		id, one := strings.CutPrefix(r.URL.Path, "/api/oidc/clients/")
-		switch {
-		case r.Method == "GET" && r.URL.Path == "/api/oidc/clients":
-			page := 1
-			fmt.Sscan(r.URL.Query().Get("pagination[page]"), &page)
-			data := list[:4]
-			if page == 2 {
-				data = list[4:]
-			}
-			json.NewEncoder(w).Encode(map[string]any{"data": data, "pagination": map[string]any{"totalPages": 2, "currentPage": page}})
-		case r.Method == "GET" && one && byID[id] != nil:
-			json.NewEncoder(w).Encode(byID[id])
-		default:
+		if r.Method != "GET" || r.URL.Path != "/api/oidc/clients" {
 			w.WriteHeader(404)
+			return
 		}
+		page := 1
+		fmt.Sscan(r.URL.Query().Get("pagination[page]"), &page)
+		data := list[:3]
+		if page == 2 {
+			data = list[3:]
+		}
+		json.NewEncoder(w).Encode(map[string]any{"data": data, "pagination": map[string]any{"totalPages": 2, "currentPage": page}})
 	}))
 	t.Cleanup(srv.Close)
 	c := mustNew(t, srv.URL, srv.Client(), week)
@@ -468,16 +459,12 @@ func TestListClientsReadsGroupsByID(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %+v\nwant %+v", got, want)
 	}
-	var reads []string
+	if len(calls) != 2 {
+		t.Fatalf("%d requests, want the 2 list pages: %+v", len(calls), calls)
+	}
 	for _, k := range calls {
-		if k.Method != "GET" || k.Key != "KEY" {
+		if k.Method != "GET" || k.Path != "/api/oidc/clients" || k.Key != "KEY" {
 			t.Errorf("request %s %s, key %q", k.Method, k.Path, k.Key)
 		}
-		if k.Path != "/api/oidc/clients" {
-			reads = append(reads, k.Path)
-		}
-	}
-	if strings.Join(reads, ",") != "/api/oidc/clients/wiki,/api/oidc/clients/gone" {
-		t.Fatalf("read by ID %v", reads)
 	}
 }

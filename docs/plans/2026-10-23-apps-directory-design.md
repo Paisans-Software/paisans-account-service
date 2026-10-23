@@ -36,8 +36,9 @@ account site is a member's one starting point.
 ## Anti-goals
 
 - The list must never show an app the user cannot open, nor hide one Pocket
-  ID's dashboard shows them. The two disagreeing is the failure this exists to
-  avoid.
+  ID's dashboard shows them, except an app whose launch URL is not a valid
+  `https://` link (below). The two disagreeing otherwise is the failure this
+  exists to avoid.
 - The account service must not write anything new at Pocket ID. Its write
   surface (`internal/idp/pocketid/writesurface_test.go`) stays as it is; only
   reads are added.
@@ -87,8 +88,9 @@ Each piece is useful alone and they may ship in any order.
   listed right now; the rest of the page renders, as the invite list does after
   #35.
 - Every value escaped; `TestHostileValuesEscapedOnEveryPage` covers a hostile
-  client name and launch URL. A launch URL that is not `https://` is not
-  rendered as a link (*Claude's call*).
+  client name and launch URL. An app whose launch URL is not an absolute
+  `https://` URL is left off the list, and the service logs a warning naming
+  the client. *Founder.*
 - README and CHANGELOG (at most 35 words a bullet).
 
 ### 2. Paisans CLI: the account app has no launch URL

@@ -53,9 +53,10 @@ type Fake struct {
 	FailGroupReadBack error
 	// GroupWrites counts the group writes ChangeGroups made.
 	GroupWrites int
-	// Clients are the provider's OIDC clients, as Clients returns them.
+	// Clients are the provider's OIDC clients, as ListClients returns them.
 	Clients []idp.Client
-	// FailClients makes Clients alone fail.
+	// FailClients makes ListClients fail, and nothing else. FailLookup fails
+	// it too, with every other read.
 	FailClients bool
 }
 

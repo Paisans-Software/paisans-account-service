@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/paisans-software/paisans-account-service/internal/flow"
 )
 
 func TestRendererAccentIsSanitised(t *testing.T) {
@@ -135,7 +137,13 @@ func TestEveryPageExecutes(t *testing.T) {
 			"InvitesOn": true, "Remaining": "2 invites left", "NewLink": "https://x.example/join/abc", "Expires": "1 Nov",
 			"Invites": []invite{{"i1", "open", now, nil}, {"i2", "used", now, &invitee{Username: "bob", DisplayName: "Bob"}},
 				{"i3", "used", now, &invitee{Gone: true}}, {"i4", "used", now, &invitee{Unavailable: true}}},
+			"Apps": []flow.App{{ID: "c1", Name: "Forum", URL: "https://forum.example.org", Host: "forum.example.org", LogoURL: "https://id.example.org/api/oidc/clients/c1/logo"},
+				{ID: "c2", Name: "wiki", URL: "https://wiki.example.org", Host: "wiki.example.org", Letter: "W"},
+				{ID: "c3", URL: "https://blank.example.org", Host: "blank.example.org"}},
 		},
+		// The Your apps card with no app, and with Pocket ID unreachable.
+		"home.html empty":       map[string]any{},
+		"home.html unavailable": map[string]any{"AppsUnavailable": true},
 		"admin.html": []application{
 			{"a1", "Bob", "bob", "b@example.org", "alice", "pending", now, declines{2, now}, false},
 			{"a2", "Cy", "cy", "c@example.org", "alice", "link_unsent", now, declines{}, false},
@@ -145,12 +153,13 @@ func TestEveryPageExecutes(t *testing.T) {
 		"invite.html":  map[string]string{"Inviter": "alice", "CoC": "Be kind.", "Username": "bob", "DisplayName": "Bob", "Email": "b@example.org"},
 		"message.html": map[string]string{"Heading": "Hello", "Body": "b"},
 	}
-	for name, data := range pages {
+	for key, data := range pages {
+		name, _, _ := strings.Cut(key, " ")
 		rec := httptest.NewRecorder()
 		r.page(rec, 200, name, view{Title: name, CSRF: "tok", Session: sess, Data: data})
 		out := rec.Body.String()
 		if !strings.Contains(out, "</html>") {
-			t.Errorf("%s did not render to the end: %q", name, out)
+			t.Errorf("%s did not render to the end: %q", key, out)
 		}
 	}
 }

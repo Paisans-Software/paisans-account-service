@@ -13,6 +13,10 @@ import (
 )
 
 type homeData struct {
+	// Apps are the Your apps card's tiles; AppsUnavailable says Pocket ID
+	// could not be asked for them, which leaves the rest of the page as it is.
+	Apps            []flow.App
+	AppsUnavailable bool
 	// InvitesOn shows the invite cards, which open signup has none of.
 	InvitesOn        bool
 	Invites          []flow.Invite
@@ -25,8 +29,14 @@ type homeData struct {
 const alreadyMade = "That invite was already made. It's in your list below. If you didn't copy the link, revoke it and make a new one."
 
 func (s *server) homeView(r *http.Request, sess Session, extra homeData) (homeData, error) {
+	apps, err := s.Flow.Apps(r.Context(), sess.member())
+	if err != nil {
+		slog.Warn("the apps cannot be listed", "error", err)
+		extra.AppsUnavailable = true
+	}
+	extra.Apps = apps
 	if s.Signup != config.SignupInvite {
-		return homeData{}, nil
+		return homeData{Apps: extra.Apps, AppsUnavailable: extra.AppsUnavailable}, nil
 	}
 	extra.InvitesOn = true
 	invites, err := s.Flow.Invites(r.Context(), sess.member())

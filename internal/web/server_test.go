@@ -476,6 +476,13 @@ func TestHostileValuesEscapedOnEveryPage(t *testing.T) {
 	h := newHarness(t, true)
 	evil := Session{Sub: "s-evil", Username: hostile, CSRF: "tok", Exp: time.Now().Add(time.Hour).Unix()}
 	h.fake.Users = append(h.fake.Users, idp.User{ID: evil.Sub, Username: hostile})
+	// A hostile client name, a launch URL that is a script, and one that
+	// tries to break out of the href.
+	h.fake.Clients = []idp.Client{
+		{ID: "c-evil", Name: "<script>x</script>", LaunchURL: "https://evil.example.org"},
+		{ID: "c-js", Name: "js", LaunchURL: "javascript:alert(1)"},
+		{ID: "c-quote", Name: "quote", LaunchURL: "https://q.example.org/?q=" + hostile},
+	}
 	tok, _ := h.inviteAs(t, flow.Member{Sub: evil.Sub, Username: evil.Username})
 	inviteRec := h.get(joinHost, "/i/"+tok)
 	if _, err := h.flow.Apply(context.Background(), tok, flow.Applicant{Username: "bob", Email: "bob@x.org", DisplayName: hostile, FirstName: "Bob", Agreed: true}); err != nil {
@@ -496,6 +503,10 @@ func TestHostileValuesEscapedOnEveryPage(t *testing.T) {
 		if rec.Code != 200 || strings.Contains(body, "<script>") || !strings.Contains(body, "&lt;script&gt;alert(1)&lt;/script&gt;") {
 			t.Errorf("%s: %d %s", name, rec.Code, body)
 		}
+	}
+	if body := home.Body.String(); !strings.Contains(body, "<b>&lt;script&gt;x&lt;/script&gt;</b>") ||
+		strings.Contains(body, "javascript:") || strings.Contains(body, `"><script>`) || !strings.Contains(body, `href="https://q.example.org/?q=%22%3e%3cscript%3ealert%281%29%3c/script%3e"`) {
+		t.Errorf("home apps: %s", body)
 	}
 }
 
@@ -599,5 +610,62 @@ func TestHomeNamesTheInvitee(t *testing.T) {
 	rec = h.as(member, "GET", "/", nil)
 	if body := rec.Body.String(); rec.Code != 200 || !strings.Contains(body, `<td>used</td><td><span class="muted">Account deleted</span></td>`) {
 		t.Fatalf("deleted account: %d %s", rec.Code, body)
+	}
+}
+
+// The Your apps card comes first on the home page, whatever the signup mode:
+// one tile per app, linking to its launch URL, with Pocket ID's logo or the
+// name's letter.
+func TestHomeListsApps(t *testing.T) {
+	for _, signup := range []string{config.SignupInvite, config.SignupOpen} {
+		h := newHarnessSignup(t, signup)
+		h.fake.Clients = []idp.Client{
+			{ID: "c-wiki", Name: "wiki", LaunchURL: "https://wiki.example.org/start"},
+			{ID: "c-forum", Name: "Forum", LaunchURL: "https://forum.example.org", HasLogo: true},
+		}
+		rec := h.as(member, "GET", "/", nil)
+		body := rec.Body.String()
+		forum := `<a class="app-tile" href="https://forum.example.org"><img src="https://id.example.org/api/oidc/clients/c-forum/logo" alt=""><b>Forum</b><span class="muted">forum.example.org</span></a>`
+		wiki := `<a class="app-tile" href="https://wiki.example.org/start"><span class="app-letter">W</span><b>wiki</b><span class="muted">wiki.example.org</span></a>`
+		apps := strings.Index(body, `<div class="card"><h1>Your apps</h1>`)
+		first := strings.Index(body, `<div class="card">`)
+		if rec.Code != 200 || apps < 0 || apps != first || !strings.Contains(body, `<div class="apps">`+forum+wiki+`</div>`) {
+			t.Errorf("%s: %d %s", signup, rec.Code, body)
+		}
+	}
+}
+
+// A member Pocket ID gives no app is told so.
+func TestHomeAppsEmpty(t *testing.T) {
+	h := newHarness(t, true)
+	h.fake.Clients = []idp.Client{{ID: "c-ops", Name: "Uptime", LaunchURL: "https://up.example.org", Restricted: true, AllowedGroupIDs: []string{"g-operators"}}}
+	rec := h.as(member, "GET", "/", nil)
+	if body := rec.Body.String(); rec.Code != 200 || !strings.Contains(body, `<h1>Your apps</h1><p class="muted">You don't have any apps yet.</p></div>`) ||
+		strings.Contains(body, "app-tile") {
+		t.Fatalf("%d %s", rec.Code, body)
+	}
+}
+
+// When Pocket ID's clients cannot be read, the card says so and the rest of
+// the page, the invites included, still renders.
+func TestHomeAppsUnavailable(t *testing.T) {
+	h := newHarness(t, true)
+	h.invite(t)
+	h.fake.FailClients = true
+	rec := h.as(member, "GET", "/", nil)
+	if body := rec.Body.String(); rec.Code != 200 || !strings.Contains(body, `<h1>Your apps</h1><p class="muted">Your apps can't be listed right now.</p></div>`) ||
+		!strings.Contains(body, "<td>open</td>") || !strings.Contains(body, "Make an invite link") {
+		t.Fatalf("%d %s", rec.Code, body)
+	}
+}
+
+// The policy admits Pocket ID's client logos and nothing wider: images come
+// from this service, the application logo and the clients' logo path.
+func TestHomeAppsCSP(t *testing.T) {
+	h := newHarness(t, true)
+	h.fake.Clients = []idp.Client{{ID: "c-forum", Name: "Forum", LaunchURL: "https://forum.example.org", HasLogo: true}}
+	csp := h.as(member, "GET", "/", nil).Header().Get("Content-Security-Policy")
+	if !strings.Contains(csp, "; img-src 'self' https://id.example.org/api/application-images/logo https://id.example.org/api/oidc/clients/; ") {
+		t.Fatalf("CSP %q", csp)
 	}
 }

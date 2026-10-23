@@ -1,4 +1,9 @@
 {{define "content"}}
+<div class="card"><h1>Your apps</h1>
+  {{- if .Data.AppsUnavailable}}<p class="muted">Your apps can't be listed right now.</p>
+  {{- else if .Data.Apps}}<div class="apps">{{range .Data.Apps}}<a class="app-tile" href="{{.URL}}">{{if .LogoURL}}<img src="{{.LogoURL}}" alt="">{{else}}<span class="app-letter">{{.Letter}}</span>{{end}}<b>{{.Name}}</b><span class="muted">{{.Host}}</span></a>{{end}}</div>
+  {{- else}}<p class="muted">You don't have any apps yet.</p>
+  {{- end}}</div>
 {{if .Data.InvitesOn}}
 <div class="card">
   <h1>Invite someone</h1>

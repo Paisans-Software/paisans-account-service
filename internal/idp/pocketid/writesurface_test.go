@@ -35,11 +35,11 @@ var allowedImports = map[string]bool{
 }
 
 // pidTypes are the shared client's types the package may name.
-var pidTypes = map[string]bool{"Client": true, "User": true, "NewUser": true, "UserChange": true, "Group": true, "APIError": true}
+var pidTypes = map[string]bool{"Client": true, "User": true, "NewUser": true, "UserChange": true, "Group": true, "OIDCClient": true, "APIError": true}
 
 // pidReads are the shared client's methods that only read; any function may
 // call them.
-var pidReads = map[string]bool{"Users": true, "User": true, "FindGroup": true, "Groups": true}
+var pidReads = map[string]bool{"Users": true, "User": true, "FindGroup": true, "Groups": true, "OIDCClients": true, "OIDCClientByID": true}
 
 // pidWrites is each shared-client method that writes, and the functions that
 // may call it, each exactly once.
@@ -168,7 +168,7 @@ func TestWriteSurface(t *testing.T) {
 
 	exported := map[string]bool{"UsernameTaken": true, "EmailTaken": true, "FindUser": true, "AdminGroupEmails": true, "GroupMembers": true, "CreateUser": true, "SendLoginLink": true,
 		"ListUsers": true, "GetUser": true, "SetDisabled": true, "SetEmail": true, "SetName": true,
-		"ListGroups": true, "UserGroups": true, "ChangeGroups": true}
+		"ListGroups": true, "UserGroups": true, "ChangeGroups": true, "ListClients": true}
 	httpWrites := map[string]int{}
 	pidCalls := map[string]int{}
 	selfLits, pidClientLits, newUserLits := 0, 0, 0
@@ -1074,11 +1074,14 @@ func checkChangeGroupsFunc(t *testing.T, fn *ast.FuncDecl) {
 
 // approvedRoutes are every request the service may make at Pocket ID, by
 // method and route, with :id for a path segment. Groups is the GET of
-// /api/user-groups; UpdateUser is a GET and a PUT of /api/users/:id.
+// /api/user-groups; UpdateUser is a GET and a PUT of /api/users/:id;
+// OIDCClients and OIDCClientByID are GETs of /api/oidc/clients.
 var approvedRoutes = map[string]bool{
 	"GET /api/users":                            true,
 	"GET /api/users/:id":                        true,
 	"GET /api/user-groups":                      true,
+	"GET /api/oidc/clients":                     true,
+	"GET /api/oidc/clients/:id":                 true,
 	"POST /api/users":                           true,
 	"POST /api/users/:id/one-time-access-email": true,
 	"PUT /api/users/:id":                        true,
@@ -1090,6 +1093,9 @@ func route(method, path string) string {
 	parts := strings.Split(path, "/")
 	if len(parts) > 3 && parts[1] == "api" && (parts[2] == "users" || parts[2] == "user-groups") {
 		parts[3] = ":id"
+	}
+	if len(parts) > 4 && parts[1] == "api" && parts[2] == "oidc" && parts[3] == "clients" {
+		parts[4] = ":id"
 	}
 	return method + " " + strings.Join(parts, "/")
 }
@@ -1105,6 +1111,8 @@ func TestWriteSurfaceOnTheWire(t *testing.T) {
 	var calls []call
 	user := map[string]any{"id": "u1", "username": "bob", "email": "bob@x.org", "displayName": "Bob", "firstName": "Bob",
 		"isAdmin": false, "userGroups": []any{map[string]any{"id": "g-admins", "name": "admins"}}}
+	client := map[string]any{"id": "c1", "name": "Wiki", "launchURL": "https://wiki.example.org", "isGroupRestricted": true,
+		"allowedUserGroups": []any{map[string]any{"id": "g-admins", "name": "admins"}}}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls = append(calls, call{Method: r.Method, Path: r.URL.Path, Key: r.Header.Get("X-API-Key")})
 		io.Copy(io.Discard, r.Body)
@@ -1115,6 +1123,10 @@ func TestWriteSurfaceOnTheWire(t *testing.T) {
 			json.NewEncoder(w).Encode(map[string]any{"data": groupsNamed("members", "admins"), "pagination": map[string]any{"totalPages": 1}})
 		case "GET /api/users/:id", "PUT /api/users/:id":
 			json.NewEncoder(w).Encode(user)
+		case "GET /api/oidc/clients":
+			json.NewEncoder(w).Encode(map[string]any{"data": []any{client}, "pagination": map[string]any{"totalPages": 1}})
+		case "GET /api/oidc/clients/:id":
+			json.NewEncoder(w).Encode(client)
 		case "POST /api/users":
 			w.WriteHeader(201)
 			json.NewEncoder(w).Encode(user)
@@ -1135,6 +1147,8 @@ func TestWriteSurfaceOnTheWire(t *testing.T) {
 		groups  = "GET /api/user-groups"
 		update  = user1 + ";PUT /api/users/:id"
 		setGrps = "PUT /api/users/:id/user-groups"
+		clients = "GET /api/oidc/clients"
+		client1 = "GET /api/oidc/clients/:id"
 	)
 	for _, m := range []struct {
 		name     string
@@ -1150,6 +1164,7 @@ func TestWriteSurfaceOnTheWire(t *testing.T) {
 		{"GetUser", user1, func() error { _, err := c.GetUser(ctx, "u1"); return err }},
 		{"ListGroups", groups, func() error { _, err := c.ListGroups(ctx); return err }},
 		{"UserGroups", user1, func() error { _, err := c.UserGroups(ctx, "u1"); return err }},
+		{"ListClients", clients + ";" + client1, func() error { _, err := c.ListClients(ctx); return err }},
 		{"CreateUser", "POST /api/users", func() error {
 			_, err := c.CreateUser(ctx, idp.NewUser{Username: "ann", Email: "ann@x.org", DisplayName: "Ann"})
 			return err

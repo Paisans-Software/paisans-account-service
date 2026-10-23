@@ -77,7 +77,8 @@ type Settings struct {
 	LoginLinkDays int
 	// IDPURL is the identity provider as members reach it, its public URL
 	// (config.Config.IDPPublicURL), for mail that sends someone there to
-	// sign in. It is never ACCOUNT_IDP_URL, which is a private address.
+	// sign in and for the apps' logos. It is never ACCOUNT_IDP_URL, which is
+	// a private address.
 	IDPURL string
 	// Operators are the usernames the deployment declares as operators: the
 	// service never bans them or changes their address or name.

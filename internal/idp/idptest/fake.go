@@ -3,6 +3,7 @@ package idptest
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"sort"
@@ -52,6 +53,10 @@ type Fake struct {
 	FailGroupReadBack error
 	// GroupWrites counts the group writes ChangeGroups made.
 	GroupWrites int
+	// Clients are the provider's OIDC clients, as Clients returns them.
+	Clients []idp.Client
+	// FailClients makes Clients alone fail.
+	FailClients bool
 }
 
 func (f *Fake) UsernameTaken(_ context.Context, n string) (bool, error) {
@@ -291,6 +296,18 @@ func (f *Fake) UserGroups(_ context.Context, id string) ([]idp.Group, error) {
 	}
 	gs, _, err := f.userGroups(id)
 	return gs, err
+}
+
+func (f *Fake) ListClients(context.Context) ([]idp.Client, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.FailLookup != nil {
+		return nil, f.FailLookup
+	}
+	if f.FailClients {
+		return nil, errors.New("identity provider: the clients cannot be listed")
+	}
+	return slices.Clone(f.Clients), nil
 }
 
 // In reports whether the user named username is in the group named group.

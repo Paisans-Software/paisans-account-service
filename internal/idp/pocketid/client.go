@@ -329,6 +329,36 @@ func (c *Client) ChangeGroups(ctx context.Context, id string, add, remove []stri
 	return groupChange(before, after), nil
 }
 
+// ListClients returns every OIDC client, for the apps a member may open. The
+// list (controller/oidc_controller.go:31 at v2.18.0) may leave out a client's
+// allowed groups, so each restricted client with a launch URL is read again by
+// ID (:33) for them; one deleted between the two reads is left out. A client
+// without a launch URL is on no dashboard, so its groups are not read.
+func (c *Client) ListClients(ctx context.Context) ([]idp.Client, error) {
+	cs, err := c.api.OIDCClients(ctx)
+	if err != nil {
+		return nil, wrap(err)
+	}
+	out := make([]idp.Client, 0, len(cs))
+	for _, oc := range cs {
+		cl := idp.Client{ID: oc.ID, Name: oc.Name, LaunchURL: deref(oc.LaunchURL), HasLogo: oc.HasLogo, Restricted: oc.IsGroupRestricted}
+		if cl.Restricted && cl.LaunchURL != "" {
+			full, err := c.api.OIDCClientByID(ctx, oc.ID)
+			if err != nil {
+				return nil, wrap(err)
+			}
+			if full == nil {
+				continue
+			}
+			for _, g := range full.AllowedUserGroups {
+				cl.AllowedGroupIDs = append(cl.AllowedGroupIDs, g.ID)
+			}
+		}
+		out = append(out, cl)
+	}
+	return out, nil
+}
+
 func groupIDs(gs []idp.Group) []string {
 	out := make([]string, 0, len(gs))
 	for _, g := range gs {

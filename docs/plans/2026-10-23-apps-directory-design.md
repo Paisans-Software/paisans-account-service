@@ -48,16 +48,17 @@ account site is a member's one starting point.
 
 Pocket ID's dashboard lists a client when it has a launch URL and either is not
 group-restricted or allows one of the user's groups
-(`service/oidc_service.go:673-680` and `:758-765` at `v2.14.0`, as cited in the
-Paisans CLI README). The account service applies the same rule, reading from
-Pocket ID on every load of the home page, so a group change shows at once.
+(`service/oidc_service.go:844-857` at `v2.18.0`). The account service applies
+the same rule, reading from Pocket ID on every load of the home page, so a
+group change shows at once.
 
-*Builder's call:* how to read it. Pocket ID's client list gives only a count of
-allowed groups (pocketid-go `FindOIDCClient` comment), so either read each
-client by ID, or use an admin endpoint that answers a given user's accessible
-clients if Pocket ID has one. Check Pocket ID's source at the version Paisans
-deploys and cite it, as the existing client code does. A handful of apps is the
-expected size; a per-request read of each is acceptable.
+*Builder's call:* how to read it. Pocket ID's client list
+(`controller/oidc_controller.go:31` at `v2.18.0`) includes each client's
+`allowedUserGroups`, `hasLogo` and `hasDarkLogo`. The service lists the
+clients, then reads each restricted client that has a launch URL by ID (`:33`)
+for its allowed groups, as pocketid-go's `OIDCClients` tells a caller that
+needs them to. A handful of apps is the expected size; a per-request
+read of each is acceptable.
 
 The user's groups come from the existing `UserGroups`.
 
@@ -69,19 +70,24 @@ Each piece is useful alone and they may ship in any order.
 
 - New read-only provider call(s) on `idp.Provider` (and `pocketid/client.go`,
   `idptest` fake): the clients with their name, launch URL, group restriction,
-  allowed groups and whether they have a logo. Listed in `TestWriteSurface`'s
+  allowed groups and whether they have a light or a dark logo. Listed in `TestWriteSurface`'s
   exported methods and `TestWriteSurfaceOnTheWire` as reads.
 - pocketid-go has no call that lists clients with these fields; add one there
-  (`ListOIDCClients` or similar, plus `HasLogo` on `OIDCClient` if Pocket ID
-  returns it) and release a new pocketid-go minor version, then bump it here.
+  (`OIDCClients`, plus `HasLogo` and `HasDarkLogo` on `OIDCClient`) and
+  release a new pocketid-go version, then bump it here.
 - `flow`: `Apps(ctx, member)` returns the tiles, sorted by name (*Claude's
   call*).
 - `home.html`: the Your apps card first, for every signed-in user, whatever the
   signup mode. Tiles in a responsive grid that works at phone width.
-- **Logo** (*Claude's call*): when Pocket ID has one for the client, show it;
-  otherwise a letter tile. *Builder's call:* whether the browser loads Pocket
-  ID's logo URL directly (only if that endpoint needs no admin credential) or
-  the service proxies it; never expose the API key to the browser.
+- **Logo** (*Claude's call*): when Pocket ID has a light or a dark logo for the
+  client, show it, as its dashboard does
+  (`authorized-oidc-client-card.svelte:43`); otherwise a letter tile. The
+  browser loads Pocket ID's public logo route directly
+  (`controller/oidc_controller.go:43`), which needs no credential, so the API
+  key never reaches it. A `<picture>` asks for `?light=false` when the browser
+  prefers a dark scheme, as Pocket ID's dashboard does
+  (`cached-image-util.ts:68`), and Pocket ID serves the other variant when the
+  client has only one (`service/oidc_service.go:526-537`).
 - **Hostname** under the name is the launch URL's host.
 - **Empty** (*Claude's call*): "You don't have any apps yet."
 - **Pocket ID unreachable** (*Claude's call*): the card says the apps can't be

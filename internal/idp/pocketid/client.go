@@ -341,7 +341,7 @@ func (c *Client) ListClients(ctx context.Context) ([]idp.Client, error) {
 	}
 	out := make([]idp.Client, 0, len(cs))
 	for _, oc := range cs {
-		cl := idp.Client{ID: oc.ID, Name: oc.Name, LaunchURL: deref(oc.LaunchURL), HasLogo: oc.HasLogo, Restricted: oc.IsGroupRestricted}
+		cl := idp.Client{ID: oc.ID, Name: oc.Name, LaunchURL: deref(oc.LaunchURL), HasLogo: oc.HasLogo, HasDarkLogo: oc.HasDarkLogo, Restricted: oc.IsGroupRestricted}
 		if cl.Restricted && cl.LaunchURL != "" {
 			full, err := c.api.OIDCClientByID(ctx, oc.ID)
 			if err != nil {

@@ -5,7 +5,7 @@ go 1.25.8
 require (
 	github.com/coreos/go-oidc/v3 v3.21.0
 	github.com/jackc/pgx/v5 v5.11.0
-	github.com/paisans-software/pocketid-go v0.3.0
+	github.com/paisans-software/pocketid-go v0.3.1
 	github.com/wneessen/go-mail v0.8.1
 	github.com/yuin/goldmark v1.8.6
 	golang.org/x/oauth2 v0.36.0

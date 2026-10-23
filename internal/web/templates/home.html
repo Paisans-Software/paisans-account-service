@@ -1,7 +1,7 @@
 {{define "content"}}
 <div class="card"><h1>Your apps</h1>
   {{- if .Data.AppsUnavailable}}<p class="muted">Your apps can't be listed right now.</p>
-  {{- else if .Data.Apps}}<div class="apps">{{range .Data.Apps}}<a class="app-tile" href="{{.URL}}">{{if .LogoURL}}<img src="{{.LogoURL}}" alt="">{{else}}<span class="app-letter">{{.Letter}}</span>{{end}}<b>{{.Name}}</b><span class="muted">{{.Host}}</span></a>{{end}}</div>
+  {{- else if .Data.Apps}}<div class="apps">{{range .Data.Apps}}<a class="app-tile" href="{{.URL}}">{{if .LogoURL}}<picture><source media="(prefers-color-scheme: dark)" srcset="{{.LogoURL}}?light=false"><img src="{{.LogoURL}}" alt=""></picture>{{else}}<span class="app-letter">{{.Letter}}</span>{{end}}<b>{{.Name}}</b><span class="muted">{{.Host}}</span></a>{{end}}</div>
   {{- else}}<p class="muted">You don't have any apps yet.</p>
   {{- end}}</div>
 {{if .Data.InvitesOn}}
@@ -17,10 +17,6 @@
   {{range .Data.Invites}}<tr><td>{{.CreatedAt.Format "2 Jan 2006"}}</td><td>{{.State}}</td><td>{{with .Invitee}}{{if .Gone}}<span class="muted">Account deleted</span>{{else if .Unavailable}}<span class="muted">Can't be looked up right now</span>{{else}}{{with .DisplayName}}{{.}}<br>{{end}}<span class="muted">{{.Username}}</span>{{end}}{{end}}</td>
   <td>{{if eq .State "open"}}<form class="inline" method="post" action="/invites/{{.ID}}/revoke"><input type="hidden" name="csrf" value="{{$.CSRF}}"><button class="secondary">Revoke</button></form>{{end}}</td></tr>{{end}}
   </table>{{else}}<p class="muted">You have not made any invites yet.</p>{{end}}
-</div>
-{{else}}
-<div class="card">
-  <p>Signed in as {{.Session.Username}}.</p>
 </div>
 {{end}}
 <div class="card">

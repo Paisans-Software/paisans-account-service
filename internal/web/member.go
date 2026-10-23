@@ -31,7 +31,7 @@ const alreadyMade = "That invite was already made. It's in your list below. If y
 func (s *server) homeView(r *http.Request, sess Session, extra homeData) (homeData, error) {
 	apps, err := s.Flow.Apps(r.Context(), sess.member())
 	if err != nil {
-		slog.Warn("the apps cannot be listed", "error", err)
+		slog.Warn("the apps cannot be listed", "user_id", sess.Sub, "error", err)
 		extra.AppsUnavailable = true
 	}
 	extra.Apps = apps

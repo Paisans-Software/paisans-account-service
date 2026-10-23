@@ -423,6 +423,7 @@ func TestListClientsReadsGroupsByID(t *testing.T) {
 	launch := func(s string) any { return s }
 	list := []map[string]any{
 		{"id": "open", "name": "Open", "launchURL": launch("https://open.example.org"), "hasLogo": true},
+		{"id": "night", "name": "Night", "launchURL": launch("https://night.example.org"), "hasDarkLogo": true},
 		{"id": "wiki", "name": "Wiki", "launchURL": launch("https://wiki.example.org"), "isGroupRestricted": true},
 		{"id": "gone", "name": "Gone", "launchURL": launch("https://gone.example.org"), "isGroupRestricted": true},
 		{"id": "hidden", "name": "Hidden", "launchURL": nil, "isGroupRestricted": true},
@@ -440,9 +441,9 @@ func TestListClientsReadsGroupsByID(t *testing.T) {
 		case r.Method == "GET" && r.URL.Path == "/api/oidc/clients":
 			page := 1
 			fmt.Sscan(r.URL.Query().Get("pagination[page]"), &page)
-			data := list[:3]
+			data := list[:4]
 			if page == 2 {
-				data = list[3:]
+				data = list[4:]
 			}
 			json.NewEncoder(w).Encode(map[string]any{"data": data, "pagination": map[string]any{"totalPages": 2, "currentPage": page}})
 		case r.Method == "GET" && one && byID[id] != nil:
@@ -459,6 +460,7 @@ func TestListClientsReadsGroupsByID(t *testing.T) {
 	}
 	want := []idp.Client{
 		{ID: "open", Name: "Open", LaunchURL: "https://open.example.org", HasLogo: true},
+		{ID: "night", Name: "Night", LaunchURL: "https://night.example.org", HasDarkLogo: true},
 		{ID: "wiki", Name: "Wiki", LaunchURL: "https://wiki.example.org", Restricted: true, AllowedGroupIDs: []string{"g-members", "g-wiki"}},
 		{ID: "hidden", Name: "Hidden", Restricted: true},
 		{ID: "blank", Name: "Blank", Restricted: true},

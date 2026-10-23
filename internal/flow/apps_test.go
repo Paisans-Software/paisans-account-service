@@ -111,23 +111,28 @@ func TestAppsSortedByName(t *testing.T) {
 	}
 }
 
-// An app with a logo has Pocket ID's public logo URL; one without has none
-// and a letter, the first of its name, upper-cased.
+// An app with a light or a dark logo has Pocket ID's public logo URL, which
+// serves either; one with neither has none and a letter, the first of its
+// name, upper-cased.
 func TestAppsLogoAndLetter(t *testing.T) {
 	s, f := appsSetup(t)
 	f.Clients = []idp.Client{
 		{ID: "a b/c", Name: "Logo", LaunchURL: "https://logo.example.org", HasLogo: true},
+		{ID: "d", Name: "Night", LaunchURL: "https://night.example.org", HasDarkLogo: true},
 		{ID: "e", Name: "émile", LaunchURL: "https://emile.example.org"},
 	}
 	got := apps(t, s, bobApps)
-	if len(got) != 2 {
+	if len(got) != 3 {
 		t.Fatalf("%+v", got)
 	}
-	if got[0].LogoURL != "https://id.example.org/api/oidc/clients/a%20b%2Fc/logo" {
-		t.Errorf("logo URL %q", got[0].LogoURL)
+	if got[0].LogoURL != "https://id.example.org/api/oidc/clients/a%20b%2Fc/logo" || got[0].Letter != "" {
+		t.Errorf("logo tile %+v", got[0])
 	}
-	if got[1].LogoURL != "" || got[1].Letter != "É" {
-		t.Errorf("letter tile %+v", got[1])
+	if got[1].LogoURL != "https://id.example.org/api/oidc/clients/d/logo" || got[1].Letter != "" {
+		t.Errorf("dark-only logo tile %+v", got[1])
+	}
+	if got[2].LogoURL != "" || got[2].Letter != "É" {
+		t.Errorf("letter tile %+v", got[2])
 	}
 	if got[0].Name != "Logo" || got[0].URL != "https://logo.example.org" {
 		t.Errorf("%+v", got[0])

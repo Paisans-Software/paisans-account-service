@@ -12,7 +12,9 @@ import (
 )
 
 // App is one tile of a member's Your apps card. LogoURL is Pocket ID's public
-// logo of the client, or "" when it has none and Letter stands in for it.
+// light logo of the client, which with ?light=false is its dark one; Pocket ID
+// serves either variant when the client has only the other. It is "" when the
+// client has neither, and Letter stands in for it.
 type App struct {
 	ID, Name, URL, Host, LogoURL, Letter string
 }
@@ -47,7 +49,7 @@ func (s *Service) Apps(ctx context.Context, m Member) ([]App, error) {
 			continue
 		}
 		a := App{ID: c.ID, Name: c.Name, URL: c.LaunchURL, Host: u.Hostname()}
-		if c.HasLogo {
+		if c.HasLogo || c.HasDarkLogo {
 			a.LogoURL = s.s.IDPURL + "/api/oidc/clients/" + url.PathEscape(c.ID) + "/logo"
 		} else if r, _ := utf8.DecodeRuneInString(c.Name); r != utf8.RuneError {
 			a.Letter = string(unicode.ToUpper(r))

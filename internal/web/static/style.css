@@ -252,6 +252,7 @@ code { font-size: .8125rem; padding: .125rem .375rem; border-radius: var(--radiu
 	text-align: center; text-decoration: none; color: var(--foreground); border: 1px solid var(--border); border-radius: var(--radius-3xl);
 	transition: all .15s; }
 .app-tile:hover { background: color-mix(in oklab, var(--muted) 70%, transparent); transform: translateY(-2px); box-shadow: var(--shadow-sm); }
+.app-tile picture { display: contents; }
 .app-tile img, .app-letter { width: 3rem; height: 3rem; border-radius: var(--radius-2xl); }
 .app-tile img { object-fit: contain; }
 .app-letter { display: flex; align-items: center; justify-content: center; font-size: 1.25rem; font-weight: 600; background: var(--muted); }

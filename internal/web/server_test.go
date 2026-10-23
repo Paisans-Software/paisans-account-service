@@ -625,7 +625,7 @@ func TestHomeListsApps(t *testing.T) {
 		}
 		rec := h.as(member, "GET", "/", nil)
 		body := rec.Body.String()
-		forum := `<a class="app-tile" href="https://forum.example.org"><img src="https://id.example.org/api/oidc/clients/c-forum/logo" alt=""><b>Forum</b><span class="muted">forum.example.org</span></a>`
+		forum := `<a class="app-tile" href="https://forum.example.org"><picture><source media="(prefers-color-scheme: dark)" srcset="https://id.example.org/api/oidc/clients/c-forum/logo?light=false"><img src="https://id.example.org/api/oidc/clients/c-forum/logo" alt=""></picture><b>Forum</b><span class="muted">forum.example.org</span></a>`
 		wiki := `<a class="app-tile" href="https://wiki.example.org/start"><span class="app-letter">W</span><b>wiki</b><span class="muted">wiki.example.org</span></a>`
 		apps := strings.Index(body, `<div class="card"><h1>Your apps</h1>`)
 		first := strings.Index(body, `<div class="card">`)
@@ -660,12 +660,26 @@ func TestHomeAppsUnavailable(t *testing.T) {
 }
 
 // The policy admits Pocket ID's client logos and nothing wider: images come
-// from this service, the application logo and the clients' logo path.
+// from this service, the application logo and the clients' logo path. The
+// logo the page renders, in both themes, is under the path the policy admits.
 func TestHomeAppsCSP(t *testing.T) {
 	h := newHarness(t, true)
 	h.fake.Clients = []idp.Client{{ID: "c-forum", Name: "Forum", LaunchURL: "https://forum.example.org", HasLogo: true}}
-	csp := h.as(member, "GET", "/", nil).Header().Get("Content-Security-Policy")
-	if !strings.Contains(csp, "; img-src 'self' https://id.example.org/api/application-images/logo https://id.example.org/api/oidc/clients/; ") {
+	rec := h.as(member, "GET", "/", nil)
+	const admitted = "https://id.example.org/api/oidc/clients/"
+	csp := rec.Header().Get("Content-Security-Policy")
+	if !strings.Contains(csp, "; img-src 'self' https://id.example.org/api/application-images/logo "+admitted+"; ") {
 		t.Fatalf("CSP %q", csp)
+	}
+	body := rec.Body.String()
+	_, img, ok := strings.Cut(body, `<a class="app-tile" href="https://forum.example.org"><picture>`)
+	if !ok {
+		t.Fatalf("no logo tile: %s", body)
+	}
+	for _, attr := range []string{`srcset="`, `<img src="`} {
+		_, v, ok := strings.Cut(img, attr)
+		if !ok || !strings.HasPrefix(v, admitted) {
+			t.Errorf("%s%.60s is not under %s", attr, v, admitted)
+		}
 	}
 }

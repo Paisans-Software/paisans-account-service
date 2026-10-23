@@ -213,7 +213,8 @@ func TestOpenSignupRoutes(t *testing.T) {
 	}
 	rec := h.as(member, "GET", "/", nil)
 	if body := rec.Body.String(); rec.Code != http.StatusOK || strings.Contains(body, "Invite someone") ||
-		strings.Contains(body, "/invites") || !strings.Contains(body, "<p>Signed in as alice.</p>") {
+		strings.Contains(body, "/invites") || strings.Contains(body, "<p>Signed in as alice.</p>") ||
+		!strings.Contains(body, `<div class="card"><h1>Your apps</h1>`) {
 		t.Errorf("home under open signup: %d %q", rec.Code, body)
 	}
 	if rec := h.get("10.0.0.5:8082", "/healthz"); rec.Code != http.StatusOK {

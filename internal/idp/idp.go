@@ -52,6 +52,17 @@ type Group struct{ ID, Name, FriendlyName string }
 // GroupChange is what one group change did to a user.
 type GroupChange struct{ Added, Removed []Group }
 
+// Client is one of the provider's OIDC clients, an app a member signs in to.
+// LaunchURL is "" when the client has none. AllowedGroupIDs are the groups a
+// Restricted client admits, read only when it has a launch URL; an
+// unrestricted client admits everyone. HasLogo and HasDarkLogo say which of
+// its light and dark logos Pocket ID has.
+type Client struct {
+	ID, Name, LaunchURL              string
+	HasLogo, HasDarkLogo, Restricted bool
+	AllowedGroupIDs                  []string
+}
+
 type Provider interface {
 	UsernameTaken(ctx context.Context, username string) (bool, error)
 	EmailTaken(ctx context.Context, email string) (bool, error)
@@ -85,4 +96,6 @@ type Provider interface {
 	// membership and with ErrNoSuchGroup an unknown group, writing nothing.
 	// It returns what actually changed, read back after the write.
 	ChangeGroups(ctx context.Context, userID string, add, remove []string) (GroupChange, error)
+	// ListClients returns every OIDC client.
+	ListClients(ctx context.Context) ([]Client, error)
 }

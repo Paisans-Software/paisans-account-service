@@ -84,8 +84,31 @@ func TestSubmitAndReuse(t *testing.T) {
 	if p, _ := h.flow.Pending(context.Background()); len(p) != 1 || p[0].FirstName != "Bob" || p[0].LastName != "Ross" {
 		t.Fatalf("the application keeps the first and last name: %+v", p)
 	}
-	if rec := post(h, "/i/"+tok, form(csrf)); rec.Code != 404 {
-		t.Fatalf("second use must be the neutral page: %d", rec.Code)
+	if rec := post(h, "/i/"+tok, form(csrf)); rec.Code != 200 || !strings.Contains(rec.Body.String(), "already asked to join") {
+		t.Fatalf("a second submit must say the request is waiting: %d %s", rec.Code, rec.Body.String())
+	}
+	if p, _ := h.flow.Pending(context.Background()); len(p) != 1 {
+		t.Fatalf("a second submit must store nothing: %+v", p)
+	}
+	rec = h.get(joinHost, "/i/"+tok)
+	if body := rec.Body.String(); rec.Code != 200 || !strings.Contains(body, "already asked to join") || strings.Contains(body, "can&#39;t be used") {
+		t.Fatalf("revisiting must say the request is waiting: %d %s", rec.Code, body)
+	}
+}
+
+func TestDeclinedInviteIsNeutral(t *testing.T) {
+	h := newHarness(t, true)
+	tok, csrf := h.invite(t)
+	post(h, "/i/"+tok, form(csrf))
+	p, _ := h.flow.Pending(context.Background())
+	if len(p) != 1 {
+		t.Fatalf("%+v", p)
+	}
+	if err := h.flow.Decline(context.Background(), flow.Member{Sub: "s-root", Username: "root", Admin: true}, p[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	if rec := h.get(joinHost, "/i/"+tok); rec.Code != 404 || !strings.Contains(rec.Body.String(), "can&#39;t be used") {
+		t.Fatalf("a declined invite is the neutral page: %d", rec.Code)
 	}
 }
 

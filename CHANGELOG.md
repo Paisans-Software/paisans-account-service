@@ -5,6 +5,10 @@ All notable changes to this project are documented here, in the
 
 ## [Unreleased]
 
+### Fixed
+
+- Opening an invite link again after asking to join with it says the request is waiting for an admin. It said the invite can't be used, as though it had expired or been withdrawn. Submitting the form again says the same and stores nothing.
+
 ## [0.6.0] - 2026-10-23
 
 ### Added

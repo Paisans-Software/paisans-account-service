@@ -5,6 +5,8 @@ All notable changes to this project are documented here, in the
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-11-02
+
 ### Fixed
 
 - Opening an invite link again after asking to join says the request is waiting for an admin, and submitting again stores nothing. It said the invite can't be used.

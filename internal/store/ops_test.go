@@ -154,6 +154,9 @@ func TestCompleteAndDecline(t *testing.T) {
 	if _, err := s.Application(ctx, a.ID); !errors.Is(err, store.ErrNotFound) {
 		t.Fatal("completed application must be deleted")
 	}
+	if _, err := s.OpenInvite(ctx, hash("a"), time.Now()); !errors.Is(err, store.ErrUsed) {
+		t.Fatalf("a completed application's invite is used: %v", err)
+	}
 	// a used invite returns the slot
 	if _, err := s.CreateInvite(ctx, hash("b"), "sub", "alice", fresh(), exp, 1); err != nil {
 		t.Fatalf("used invite must free the slot: %v", err)

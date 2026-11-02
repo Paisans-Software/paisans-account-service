@@ -37,13 +37,23 @@ func (s *server) waiting(w http.ResponseWriter) {
 		Body:    "You've already asked to join with this invite. An admin will review your request. Once you're approved, we'll email you a sign-in link."}})
 }
 
+// joined answers an invite whose request made an account: the sign-in link
+// went out then, so the applicant is pointed at it and at a new one.
+func (s *server) joined(w http.ResponseWriter) {
+	idp := s.Render.idp
+	s.Render.page(w, http.StatusOK, "message.html", view{Title: "You've already joined", Data: messageData{
+		Heading: "You've already joined", Body: "Your account was made with this invite. Check your email for the sign-in link we sent.", Recovery: &idp}})
+}
+
 // openFailed answers a failed OpenInvite: the waiting page for an invite
-// applied with, the neutral page when it is otherwise not usable, and a 503
-// for anything else (the database, say).
+// applied with, the joined page for one used, the neutral page when it is
+// otherwise not usable, and a 503 for anything else (the database, say).
 func (s *server) openFailed(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, store.ErrApplied):
 		s.waiting(w)
+	case errors.Is(err, store.ErrUsed):
+		s.joined(w)
 	case errors.Is(err, store.ErrNotUsable):
 		s.unusable(w)
 	default:
@@ -81,7 +91,7 @@ func (s *server) inviteSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 	now, err := s.Flow.Apply(r.Context(), tok, a)
 	switch {
-	case errors.Is(err, store.ErrApplied), errors.Is(err, store.ErrNotUsable):
+	case errors.Is(err, store.ErrApplied), errors.Is(err, store.ErrUsed), errors.Is(err, store.ErrNotUsable):
 		s.openFailed(w, err)
 	case validationSentence(err) != "":
 		inv, oerr := s.Flow.OpenInvite(r.Context(), tok)

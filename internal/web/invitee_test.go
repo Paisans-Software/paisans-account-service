@@ -96,6 +96,23 @@ func TestSubmitAndReuse(t *testing.T) {
 	}
 }
 
+func TestUsedInviteSaysJoined(t *testing.T) {
+	h := newHarness(t, false) // no approval: the account is made at once
+	tok, csrf := h.invite(t)
+	if rec := post(h, "/i/"+tok, form(csrf)); rec.Code != 200 || !strings.Contains(rec.Body.String(), "Check your email") {
+		t.Fatalf("%d %s", rec.Code, rec.Body.String())
+	}
+	for name, rec := range map[string]*httptest.ResponseRecorder{
+		"revisit":  h.get(joinHost, "/i/"+tok),
+		"resubmit": post(h, "/i/"+tok, form(csrf)),
+	} {
+		body := rec.Body.String()
+		if rec.Code != 200 || !strings.Contains(body, "already joined") || !strings.Contains(body, "Link expired?") || strings.Contains(body, "can&#39;t be used") {
+			t.Fatalf("%s: a used invite must say they joined: %d %s", name, rec.Code, body)
+		}
+	}
+}
+
 func TestDeclinedInviteIsNeutral(t *testing.T) {
 	h := newHarness(t, true)
 	tok, csrf := h.invite(t)

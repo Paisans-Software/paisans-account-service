@@ -105,6 +105,21 @@ func TestExpiredInviteNotUsable(t *testing.T) {
 	}
 }
 
+func TestAppliedInviteIsPending(t *testing.T) {
+	s := storetest.New(t)
+	s.CreateInvite(ctx, hash("a"), "sub", "alice", fresh(), time.Now().Add(time.Hour), 3)
+	if _, err := s.Apply(ctx, hash("a"), time.Now(), newApp("bob")); err != nil {
+		t.Fatal(err)
+	}
+	// Past its expiry too: an application outlives the invite's own window.
+	if _, err := s.OpenInvite(ctx, hash("a"), time.Now().Add(2*time.Hour)); !errors.Is(err, store.ErrApplied) {
+		t.Fatalf("want ErrApplied, got %v", err)
+	}
+	if _, err := s.Apply(ctx, hash("a"), time.Now(), newApp("carol")); !errors.Is(err, store.ErrNotUsable) {
+		t.Fatalf("want ErrNotUsable, got %v", err)
+	}
+}
+
 func TestPendingUsernameCaseInsensitive(t *testing.T) {
 	s := storetest.New(t)
 	exp := time.Now().Add(time.Hour)
@@ -138,6 +153,9 @@ func TestCompleteAndDecline(t *testing.T) {
 	}
 	if _, err := s.Application(ctx, a.ID); !errors.Is(err, store.ErrNotFound) {
 		t.Fatal("completed application must be deleted")
+	}
+	if _, err := s.OpenInvite(ctx, hash("a"), time.Now()); !errors.Is(err, store.ErrUsed) {
+		t.Fatalf("a completed application's invite is used: %v", err)
 	}
 	// a used invite returns the slot
 	if _, err := s.CreateInvite(ctx, hash("b"), "sub", "alice", fresh(), exp, 1); err != nil {

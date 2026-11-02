@@ -11,8 +11,14 @@ import (
 )
 
 var (
-	ErrQuota         = errors.New("invite quota reached")
-	ErrNotUsable     = errors.New("invite cannot be used")
+	ErrQuota     = errors.New("invite quota reached")
+	ErrNotUsable = errors.New("invite cannot be used")
+	// ErrApplied is an invite someone has applied with, whose request to
+	// join is still waiting to be decided.
+	ErrApplied = errors.New("invite applied, request waiting")
+	// ErrUsed is an invite whose request to join was approved: its account
+	// exists.
+	ErrUsed          = errors.New("invite used, account made")
 	ErrUsernameTaken = errors.New("username taken")
 	ErrNotFound      = errors.New("not found")
 	// ErrDuplicateCreate is a create form submitted again: its nonce has
@@ -108,13 +114,26 @@ func (s *Store) RevokeInvite(ctx context.Context, id int64, inviterSub string) e
 	})
 }
 
+// OpenInvite returns the open, unexpired invite tokenHash names. An invite
+// with a request still waiting is ErrApplied, whatever its expiry, since the
+// request outlives it; one whose request made an account is ErrUsed; anything
+// else is ErrNotUsable.
 func (s *Store) OpenInvite(ctx context.Context, tokenHash []byte, now time.Time) (Invite, error) {
 	var i Invite
 	err := s.pool.QueryRow(ctx, `SELECT id, inviter_sub, inviter_username, created_at, expires_at, state
-		FROM invites WHERE token_hash=$1 AND state='open' AND expires_at > $2`, tokenHash, now).
+		FROM invites WHERE token_hash=$1`, tokenHash).
 		Scan(&i.ID, &i.InviterSub, &i.InviterUsername, &i.CreatedAt, &i.ExpiresAt, &i.State)
-	if errors.Is(err, pgx.ErrNoRows) {
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		return Invite{}, ErrNotUsable
+	case err != nil:
+		return Invite{}, err
+	case i.State == "applied":
+		return Invite{}, ErrApplied
+	case i.State == "used":
+		return Invite{}, ErrUsed
+	case i.State != "open" || !i.ExpiresAt.After(now):
 		return Invite{}, ErrNotUsable
 	}
-	return i, err
+	return i, nil
 }

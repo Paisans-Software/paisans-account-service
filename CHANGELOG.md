@@ -7,8 +7,8 @@ All notable changes to this project are documented here, in the
 
 ### Fixed
 
-- Opening an invite link again after asking to join with it says the request is waiting for an admin. It said the invite can't be used, as though it had expired or been withdrawn. Submitting the form again says the same and stores nothing.
-- Opening an invite link again after joining with it says the account was made, and points to the sign-in link email and how to get a new link. It said the invite can't be used.
+- Opening an invite link again after asking to join says the request is waiting for an admin, and submitting again stores nothing. It said the invite can't be used.
+- Opening an invite link again after joining says the account was made, and points to the sign-in email and how to get a new link. It said the invite can't be used.
 
 ## [0.6.0] - 2026-10-23
 
